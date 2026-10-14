@@ -1,0 +1,204 @@
+// Ward — hospital-verified medical fundraising on Midnight.
+// Copyright (C) 2026 Ward contributors
+// SPDX-License-Identifier: Apache-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// You may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// How Ward splits public and private state
+// ----------------------------------------
+// Public ledger (anyone can read it):
+//   - which hospitals are registered, and where their payouts go
+//   - each bill's issuing hospital, amount due, amount raised, status
+//   - the fundraiser title the patient chose to publish
+// Private state (never leaves the user's device):
+//   - the hospital's and operator's secret keys
+//   - the patient's claim code for each bill
+// The patient's name, diagnosis and medical records are never part of any
+// transaction. A fundraiser is opened by proving knowledge of the claim code
+// the hospital handed to the patient, so the chain learns that *a* rightful
+// claimant opened it, but not who they are.
+
+pragma language_version 0.23;
+
+import CompactStandardLibrary;
+
+export enum BillStatus {
+  ISSUED,      // issued by a hospital, no fundraiser yet
+  FUNDRAISING, // the patient opened the fundraiser; donations are accepted
+  FUNDED,      // donations covered the full amount due
+  CANCELLED    // withdrawn by the hospital (e.g. settled another way)
+}
+
+export struct Hospital {
+  name: Opaque<"string">;
+  payout: UserAddress; // donations are forwarded here and nowhere else
+  active: Boolean;     // the operator can suspend a hospital
+}
+
+export struct Bill {
+  hospital: Bytes<32>;               // issuing hospital's public key
+  amountDue: Uint<64>;
+  raised: Uint<64>;
+  claimCommitment: Bytes<32>;        // binds the bill to the patient's claim code
+  status: BillStatus;
+  title: Maybe<Opaque<"string">>;    // set by the patient when opening
+  treatmentComplete: Boolean;        // attested by the issuing hospital
+}
+
+// Hash of the operator's secret key; the operator onboards hospitals.
+export sealed ledger operator: Bytes<32>;
+// Token that donations are made in (tNIGHT on Preprod, a stablecoin later).
+export sealed ledger donationToken: Bytes<32>;
+
+export ledger hospitals: Map<Bytes<32>, Hospital>;
+export ledger bills: Map<Bytes<32>, Bill>;
+export ledger billCount: Counter;
+export ledger totalRaised: Uint<64>;
+
+// Role secret for the operator or a hospital, from the caller's private state.
+witness secretKey(): Bytes<32>;
+// The patient's claim code for a bill, from the caller's private state.
+witness claimCode(billId: Bytes<32>): Bytes<32>;
+
+constructor(token: Bytes<32>) {
+  operator = disclose(operatorKey(secretKey()));
+  donationToken = disclose(token);
+}
+
+// Public keys are domain-separated hashes, so one secret yields unrelated
+// keys for different roles.
+export pure circuit operatorKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "ward:operator:pk"), sk]);
+}
+
+export pure circuit hospitalKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "ward:hospital:pk"), sk]);
+}
+
+// Claim codes are 32 random bytes, so publishing this hash reveals nothing
+// about the code. Including the bill ID stops a code being replayed on
+// another bill.
+export pure circuit claimCommitment(billId: Bytes<32>, code: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<3, Bytes<32>>>([pad(32, "ward:claim"), billId, code]);
+}
+
+circuit assertOperator(): [] {
+  assert(operatorKey(secretKey()) == operator, "Only the Ward operator can do this");
+}
+
+// Returns the caller's hospital key after checking it is registered and active.
+circuit callerHospital(): Bytes<32> {
+  const hk = disclose(hospitalKey(secretKey()));
+  assert(hospitals.member(hk), "Caller is not a registered hospital");
+  assert(hospitals.lookup(hk).active, "Hospital is suspended");
+  return hk;
+}
+
+circuit getBill(id: Bytes<32>): Bill {
+  assert(bills.member(id), "Unknown bill");
+  return bills.lookup(id);
+}
+
+export circuit registerHospital(hospitalPk: Bytes<32>, name: Opaque<"string">, payout: UserAddress): [] {
+  assertOperator();
+  const pk = disclose(hospitalPk);
+  assert(!hospitals.member(pk), "Hospital already registered");
+  hospitals.insert(pk, Hospital {
+    name: disclose(name),
+    payout: disclose(payout),
+    active: true
+  });
+}
+
+export circuit setHospitalActive(hospitalPk: Bytes<32>, active: Boolean): [] {
+  assertOperator();
+  const pk = disclose(hospitalPk);
+  assert(hospitals.member(pk), "Unknown hospital");
+  hospitals.insert(pk, Hospital { ...hospitals.lookup(pk), active: disclose(active) });
+}
+
+// `code` stays a private input: only its commitment reaches the ledger.
+export circuit issueBill(billId: Bytes<32>, amountDue: Uint<64>, code: Bytes<32>): [] {
+  const hk = callerHospital();
+  const id = disclose(billId);
+  assert(!bills.member(id), "Bill ID already used");
+  const amount = disclose(amountDue);
+  assert(amount > 0, "Bill amount must be greater than zero");
+  bills.insert(id, Bill {
+    hospital: hk,
+    amountDue: amount,
+    raised: 0,
+    claimCommitment: disclose(claimCommitment(id, code)),
+    status: BillStatus.ISSUED,
+    title: none<Opaque<"string">>(),
+    treatmentComplete: false
+  });
+  billCount.increment(1);
+}
+
+// One bill, one fundraiser: a second attempt fails because the status is no
+// longer ISSUED. The claim code is checked inside the proof and never revealed.
+export circuit openFundraiser(billId: Bytes<32>, title: Opaque<"string">): [] {
+  const id = disclose(billId);
+  const bill = getBill(id);
+  assert(bill.status == BillStatus.ISSUED, "A fundraiser already exists for this bill");
+  assert(claimCommitment(id, claimCode(id)) == bill.claimCommitment, "Invalid claim code");
+  bills.insert(id, Bill {
+    ...bill,
+    status: BillStatus.FUNDRAISING,
+    title: some<Opaque<"string">>(disclose(title))
+  });
+}
+
+// Donations pass straight through to the hospital's payout address, so Ward
+// never holds funds and a copied fundraiser cannot redirect money.
+export circuit donate(billId: Bytes<32>, amount: Uint<64>): [] {
+  const id = disclose(billId);
+  const bill = getBill(id);
+  assert(bill.status == BillStatus.FUNDRAISING, "This bill is not accepting donations");
+  const hospital = hospitals.lookup(bill.hospital);
+  assert(hospital.active, "Hospital is suspended");
+  const value = disclose(amount);
+  assert(value > 0, "Donation must be greater than zero");
+  assert(value <= bill.amountDue - bill.raised, "Donation is more than the amount still owed");
+
+  receiveUnshielded(donationToken, value as Uint<128>);
+  sendUnshielded(donationToken, value as Uint<128>, right<ContractAddress, UserAddress>(hospital.payout));
+
+  const raised = (bill.raised + value) as Uint<64>;
+  bills.insert(id, Bill {
+    ...bill,
+    raised: raised,
+    status: raised == bill.amountDue ? BillStatus.FUNDED : BillStatus.FUNDRAISING
+  });
+  totalRaised = (totalRaised + value) as Uint<64>;
+}
+
+export circuit cancelBill(billId: Bytes<32>): [] {
+  const hk = callerHospital();
+  const id = disclose(billId);
+  const bill = getBill(id);
+  assert(bill.hospital == hk, "Only the issuing hospital can cancel this bill");
+  assert(bill.status != BillStatus.FUNDED, "A fully funded bill cannot be cancelled");
+  assert(bill.status != BillStatus.CANCELLED, "Bill is already cancelled");
+  bills.insert(id, Bill { ...bill, status: BillStatus.CANCELLED });
+}
+
+// Lets donors see the outcome ("treatment completed") without any medical detail.
+export circuit confirmTreatment(billId: Bytes<32>): [] {
+  const hk = callerHospital();
+  const id = disclose(billId);
+  const bill = getBill(id);
+  assert(bill.hospital == hk, "Only the issuing hospital can confirm treatment");
+  assert(bill.status != BillStatus.CANCELLED, "Bill was cancelled");
+  bills.insert(id, Bill { ...bill, treatmentComplete: true });
+}
