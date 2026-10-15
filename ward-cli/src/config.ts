@@ -26,6 +26,8 @@ export const cliDir = path.resolve(new URL(import.meta.url).pathname, "..", ".."
 export const envFile = path.join(cliDir, ".env");
 export const zkConfigPath = path.resolve(cliDir, "..", "contract", "src", "managed", "ward");
 export const deploymentFile = (network: NetworkName) => path.join(cliDir, "deployments", `${network}.json`);
+/** Saved wallet sync progress; holds key material, so it is git-ignored and owner-only. */
+export const walletStateFile = (network: NetworkName) => path.join(cliDir, ".wallet-state", `${network}.json`);
 
 export const networkName = (): NetworkName => {
   const value = (process.env.WARD_NETWORK ?? "preprod").trim();

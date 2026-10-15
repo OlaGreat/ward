@@ -40,6 +40,7 @@ import {
   readDeployment,
   saveDeployment,
   strongPassword,
+  walletStateFile,
   zkConfigPath,
 } from "./config.js";
 import { DeployerWallet } from "./wallet.js";
@@ -63,7 +64,15 @@ const redact = (text: string): string => {
   return projectId ? text.split(projectId).join("***") : text;
 };
 
-const say = (message = ""): void => console.log(redact(message));
+// Dependencies (e.g. the node RPC client) log connection URLs straight to the
+// console, so mask the project ID in every console message, not just ours.
+for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+  const original = console[method].bind(console);
+  console[method] = (...args: unknown[]) =>
+    original(...args.map((arg) => (typeof arg === "string" ? redact(arg) : arg)));
+}
+
+const say = (message = ""): void => console.log(message);
 
 const statusLabel: Record<BillStatus, string> = {
   [BillStatus.ISSUED]: "issued, waiting for the patient",
@@ -79,6 +88,7 @@ Usage: npm run ward -- <command> [options]
 Wallet and deployment
   address                 Show the deployer wallet address to fund with tNIGHT
   balance                 Sync the wallet, register NIGHT for DUST fees, show balances
+                          (the first sync on Preprod takes hours; progress is saved)
   deploy                  Deploy a new Ward instance; this CLI becomes its operator
   status                  Show hospitals and bills of the recorded deployment
   whoami                  Show this CLI's operator and hospital keys
@@ -112,8 +122,15 @@ type Session = {
 const openSession = async (network: NetworkName): Promise<Session> => {
   const env = environment(network);
   const seed = persistentSecret("WARD_WALLET_SEED");
-  const wallet = await DeployerWallet.build(logger, env, seed);
+  const wallet = await DeployerWallet.build(logger, env, seed, walletStateFile(network));
   await wallet.start();
+  // Keep sync progress if the user stops the command part-way.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      say("\nSaving wallet sync progress before exiting...");
+      void wallet.stop().finally(() => process.exit(130));
+    });
+  }
 
   const { night } = await wallet.sync();
   if (night === 0n) {
@@ -327,7 +344,7 @@ const main = async (): Promise<void> => {
 main().then(
   () => process.exit(process.exitCode ?? 0),
   (error: unknown) => {
-    console.error(redact(`\nError: ${error instanceof Error ? error.message : String(error)}`));
+    console.error(`\nError: ${error instanceof Error ? error.message : String(error)}`);
     logger.debug(error);
     process.exit(1);
   },

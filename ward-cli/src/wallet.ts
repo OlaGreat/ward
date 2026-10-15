@@ -25,9 +25,21 @@ import {
 } from "@midnight-ntwrk/midnight-js-protocol/ledger";
 import { type MidnightProvider, type UnboundTransaction, type WalletProvider } from "@midnight-ntwrk/midnight-js-types";
 import { ttlOneHour } from "@midnight-ntwrk/midnight-js-utils";
-import { type FacadeState, type WalletFacade } from "@midnight-ntwrk/wallet-sdk-facade";
-import { type DustWalletOptions, type EnvironmentConfiguration, FluentWalletBuilder } from "@midnight-ntwrk/testkit-js";
+import { type FacadeState, WalletFacade } from "@midnight-ntwrk/wallet-sdk-facade";
+import { type EnvironmentConfiguration, WalletSeeds } from "@midnight-ntwrk/testkit-js";
+import {
+  DustWallet,
+  InMemoryTransactionHistoryStorage,
+  PublicKey,
+  ShieldedWallet,
+  UnshieldedWallet,
+  WalletEntrySchema,
+  createKeystore,
+  mergeWalletEntries,
+} from "@midnight-ntwrk/wallet-sdk";
 import { type UnshieldedKeystore } from "@midnight-ntwrk/wallet-sdk-unshielded-wallet";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import * as Rx from "rxjs";
 import type { Logger } from "pino";
 
@@ -41,7 +53,34 @@ const isSynced = (state: FacadeState): boolean =>
   isComplete(state.dust.state.progress) &&
   isComplete(state.unshielded.progress);
 
+/** Share of the chain each wallet component has processed, as a percentage. */
+export type SyncProgress = {
+  readonly shielded: number;
+  readonly dust: number;
+  readonly synced: boolean;
+  readonly night: bigint;
+};
+
+const percent = (progress: unknown): number => {
+  if (isComplete(progress)) return 100;
+  const p = progress as { appliedIndex?: bigint | number; highestRelevantWalletIndex?: bigint | number } | undefined;
+  const applied = Number(p?.appliedIndex ?? 0);
+  const target = Number(p?.highestRelevantWalletIndex ?? 0);
+  return target > 0 ? Math.min(99.9, (applied / target) * 100) : 0;
+};
+
+const progressOf = (state: FacadeState): SyncProgress => ({
+  shielded: percent(state.shielded.state.progress),
+  dust: percent(state.dust.state.progress),
+  synced: isSynced(state),
+  night: state.unshielded.balances[unshieldedToken().raw] ?? 0n,
+});
+
 export type Balances = { readonly night: bigint; readonly dust: bigint };
+
+type SavedWalletState = { shielded?: string; unshielded?: string; dust?: string };
+
+const SAVE_EVERY_MS = 60_000;
 
 const balancesOf = (state: FacadeState): Balances => ({
   night: state.unshielded.balances[unshieldedToken().raw] ?? 0n,
@@ -53,38 +92,91 @@ const balancesOf = (state: FacadeState): Balances => ({
  * the CLI. Built from the seed in ward-cli/.env.
  */
 export class DeployerWallet implements MidnightProvider, WalletProvider {
+  #saveTimer: NodeJS.Timeout | undefined;
+
   private constructor(
     private readonly logger: Logger,
     readonly wallet: WalletFacade,
     private readonly keystore: UnshieldedKeystore,
     private readonly zswapSecretKeys: ZswapSecretKeys,
     private readonly dustSecretKey: DustSecretKey,
+    private readonly stateFile: string | undefined,
   ) {}
 
-  static async build(logger: Logger, env: EnvironmentConfiguration, seed: string): Promise<DeployerWallet> {
-    const dustOptions: DustWalletOptions = {
-      ledgerParams: LedgerParameters.initialParameters(),
-      additionalFeeOverhead: env.walletNetworkId === "undeployed" ? 500_000_000_000_000_000n : 1_000n,
-      feeBlocksMargin: 5,
+  /**
+   * Builds the wallet from its seed. When `stateFile` holds a previous sync,
+   * each component resumes from it instead of replaying the chain from the
+   * start (a fresh DUST sync on Preprod takes hours).
+   */
+  static async build(
+    logger: Logger,
+    env: EnvironmentConfiguration,
+    seed: string,
+    stateFile?: string,
+  ): Promise<DeployerWallet> {
+    const seeds = WalletSeeds.fromMasterSeed(seed);
+    const keystore = createKeystore(seeds.unshielded, env.walletNetworkId);
+    const history = () => new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries);
+    const configuration = {
+      indexerClientConnection: { indexerHttpUrl: env.indexer, indexerWsUrl: env.indexerWS },
+      provingServerUrl: new URL(env.proofServer),
+      networkId: env.walletNetworkId,
+      relayURL: new URL(env.nodeWS),
+      txHistoryStorage: history(),
+      costParameters: { feeBlocksMargin: 5 },
     };
-    // testkit's published typings reference an internal path alias for the seed
-    // type, so spell out the shape we rely on.
-    const built: unknown = await FluentWalletBuilder.forEnvironment(env)
-      .withDustOptions(dustOptions)
-      .withSeed(seed)
-      .buildWithoutStarting();
-    const { wallet, seeds, keystore } = built as {
-      wallet: WalletFacade;
-      seeds: { shielded: Uint8Array; dust: Uint8Array };
-      keystore: UnshieldedKeystore;
+    const dustConfiguration = {
+      ...configuration,
+      costParameters: {
+        ledgerParams: LedgerParameters.initialParameters(),
+        additionalFeeOverhead: env.walletNetworkId === "undeployed" ? 500_000_000_000_000_000n : 1_000n,
+        feeBlocksMargin: 5,
+      },
     };
+
+    const saved: SavedWalletState =
+      stateFile && existsSync(stateFile) ? (JSON.parse(readFileSync(stateFile, "utf8")) as SavedWalletState) : {};
+    if (saved.dust) logger.info("Resuming wallet sync from saved progress");
+
+    const Shielded = ShieldedWallet(configuration);
+    const Unshielded = UnshieldedWallet({ ...configuration, txHistoryStorage: history() });
+    const Dust = DustWallet(dustConfiguration);
+    const shielded = saved.shielded ? Shielded.restore(saved.shielded) : Shielded.startWithSeed(seeds.shielded);
+    const unshielded = saved.unshielded
+      ? Unshielded.restore(saved.unshielded)
+      : Unshielded.startWithPublicKey(PublicKey.fromKeyStore(keystore));
+    const dust = saved.dust
+      ? Dust.restore(saved.dust)
+      : Dust.startWithSeed(seeds.dust, LedgerParameters.initialParameters().dust);
+
+    const wallet = await WalletFacade.init({
+      configuration,
+      shielded: () => shielded,
+      unshielded: () => unshielded,
+      dust: () => dust,
+    });
     return new DeployerWallet(
       logger,
       wallet,
       keystore,
       ZswapSecretKeys.fromSeed(seeds.shielded),
       DustSecretKey.fromSeed(seeds.dust),
+      stateFile,
     );
+  }
+
+  /** Writes the current sync progress to disk (atomically; owner-only permissions). */
+  async saveState(): Promise<void> {
+    if (!this.stateFile) return;
+    const state: SavedWalletState = {
+      shielded: await this.wallet.shielded.serializeState(),
+      unshielded: await this.wallet.unshielded.serializeState(),
+      dust: await this.wallet.dust.serializeState(),
+    };
+    mkdirSync(path.dirname(this.stateFile), { recursive: true, mode: 0o700 });
+    const temporary = `${this.stateFile}.tmp`;
+    writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
+    renameSync(temporary, this.stateFile);
   }
 
   /** The unshielded address to send tNIGHT to (works before the wallet syncs). */
@@ -94,17 +186,39 @@ export class DeployerWallet implements MidnightProvider, WalletProvider {
 
   async start(): Promise<void> {
     await this.wallet.start(this.zswapSecretKeys, this.dustSecretKey);
+    this.#saveTimer = setInterval(() => {
+      this.saveState().catch((error: unknown) => this.logger.warn({ error }, "Could not save wallet state"));
+    }, SAVE_EVERY_MS);
   }
 
   async stop(): Promise<void> {
+    clearInterval(this.#saveTimer);
+    await this.saveState().catch((error: unknown) => this.logger.warn({ error }, "Could not save wallet state"));
     await this.wallet.stop();
+  }
+
+  /** Emits sync progress, at most every `intervalMs`. */
+  progress$(intervalMs = 30_000): Rx.Observable<SyncProgress> {
+    return this.wallet.state().pipe(Rx.throttleTime(intervalMs), Rx.map(progressOf));
   }
 
   /** Waits until the wallet has caught up with the chain, then returns its balances. */
   async sync(): Promise<Balances> {
-    this.logger.info("Syncing wallet with the network (this can take a minute)...");
-    const state = await Rx.firstValueFrom(this.wallet.state().pipe(Rx.throttleTime(2_000), Rx.filter(isSynced)));
-    return balancesOf(state);
+    this.logger.info("Syncing wallet with the network...");
+    const reporter = this.progress$().subscribe((p) => {
+      if (!p.synced) {
+        this.logger.info(
+          `Sync progress: shielded ${p.shielded.toFixed(1)}%, fee (DUST) ${p.dust.toFixed(1)}%, NIGHT balance ${p.night / 1_000_000n}`,
+        );
+      }
+    });
+    try {
+      const state = await Rx.firstValueFrom(this.wallet.state().pipe(Rx.throttleTime(2_000), Rx.filter(isSynced)));
+      await this.saveState();
+      return balancesOf(state);
+    } finally {
+      reporter.unsubscribe();
+    }
   }
 
   /** Waits for tNIGHT to arrive, polling the synced wallet state. */
