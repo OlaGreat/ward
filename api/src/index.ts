@@ -207,11 +207,19 @@ export class WardAPI {
     return new WardAPI(deployed, providers, initialPrivateState, logger);
   }
 
-  /** Joins an existing Ward instance, reusing this device's private state if it has one. */
-  static async join(providers: WardProviders, contractAddress: ContractAddress, logger?: Logger): Promise<WardAPI> {
+  /**
+   * Joins an existing Ward instance, reusing this device's private state if it
+   * has one. Otherwise it starts from `secretKey` (or a fresh random secret).
+   */
+  static async join(
+    providers: WardProviders,
+    contractAddress: ContractAddress,
+    logger?: Logger,
+    options: { secretKey?: Uint8Array } = {},
+  ): Promise<WardAPI> {
     providers.privateStateProvider.setContractAddress(contractAddress);
     const existing = await providers.privateStateProvider.get(wardPrivateStateKey);
-    const initialPrivateState = existing ?? createWardPrivateState(randomBytes(32));
+    const initialPrivateState = existing ?? createWardPrivateState(options.secretKey ?? randomBytes(32));
     logger?.info({ joinContract: { contractAddress } });
     const found = await findDeployedContract<WardContract>(providers, {
       contractAddress,
