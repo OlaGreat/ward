@@ -11,15 +11,16 @@
   },
   "workspaces": {
     "packages": [
-      "contract"
+      "contract",
+      "api"
     ]
   },
   "scripts": {
     "compact": "npm run compact --workspace contract",
-    "build": "npm run build --workspace contract",
-    "typecheck": "npm run typecheck --workspace contract",
-    "lint": "npm run lint --workspace contract",
-    "test": "npm run test --workspace contract"
+    "build": "npm run build --workspace contract && npm run build --workspace api",
+    "typecheck": "npm run typecheck --workspaces",
+    "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces"
   },
   "dependencies": {
     "@midnight-ntwrk/dapp-connector-api": "4.0.1",
