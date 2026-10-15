@@ -1,0 +1,20 @@
+{
+  "name": "@ward/cli",
+  "version": "0.1.0",
+  "description": "Command-line tool to deploy and operate a Ward instance",
+  "author": "OlaGreat",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ward": "tsx --env-file-if-exists=.env src/main.ts",
+    "proof-server": "docker run --rm -p 6300:6300 midnightntwrk/proof-server:8.1.3 midnight-proof-server -v",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "echo \"no CLI unit tests; see the smoke-test command\""
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "tsx": "4.23.15"
+  }
+}
