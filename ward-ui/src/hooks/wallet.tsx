@@ -1,0 +1,132 @@
+// This file is part of Ward.
+// Copyright (C) 2026 Ward contributors
+// SPDX-License-Identifier: Apache-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// You may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import type { ConnectedAPI, InitialAPI } from "@midnight-ntwrk/dapp-connector-api";
+
+const AUTOCONNECT_KEY = "ward:v1:autoconnect";
+const NETWORK = import.meta.env.VITE_NETWORK_ID;
+
+export type WalletStatus = "idle" | "connecting" | "connected" | "missing" | "error";
+
+export type WalletContextValue = {
+  readonly status: WalletStatus;
+  readonly api: ConnectedAPI | null;
+  readonly walletName: string | null;
+  readonly address: string | null;
+  /** tNIGHT in Stars, from the wallet's unshielded balance. */
+  readonly night: bigint | null;
+  /** DUST available for fees. */
+  readonly dust: bigint | null;
+  readonly error: string | null;
+  readonly connect: () => Promise<void>;
+  readonly disconnect: () => void;
+  readonly refreshBalances: () => Promise<void>;
+};
+
+const WalletContext = createContext<WalletContextValue | null>(null);
+
+/** Extensions inject `window.midnight` shortly after load, so poll briefly. */
+const findWallet = async (): Promise<InitialAPI | undefined> => {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const wallet = Object.values(window.midnight ?? {}).find(
+      (w): w is InitialAPI => !!w && typeof w.connect === "function" && w.apiVersion.startsWith("4."),
+    );
+    if (wallet) return wallet;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return undefined;
+};
+
+const describe = (error: unknown): string => {
+  if (error && typeof error === "object" && "reason" in error) return String(error.reason);
+  if (error instanceof Error) return error.message;
+  return "The wallet did not respond";
+};
+
+const NIGHT = "0000000000000000000000000000000000000000000000000000000000000000";
+
+export function WalletProvider({ children }: { children: ReactNode }) {
+  const [status, setStatus] = useState<WalletStatus>("idle");
+  const [api, setApi] = useState<ConnectedAPI | null>(null);
+  const [walletName, setWalletName] = useState<string | null>(null);
+  const [address, setAddress] = useState<string | null>(null);
+  const [night, setNight] = useState<bigint | null>(null);
+  const [dust, setDust] = useState<bigint | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadBalances = useCallback(async (connected: ConnectedAPI) => {
+    const [unshielded, dustBalance] = await Promise.all([
+      connected.getUnshieldedBalances(),
+      connected.getDustBalance(),
+    ]);
+    const nightKey = Object.keys(unshielded).find((key) => key.endsWith(NIGHT));
+    setNight(nightKey ? unshielded[nightKey] : 0n);
+    setDust(dustBalance.balance);
+  }, []);
+
+  const connect = useCallback(async () => {
+    setStatus("connecting");
+    setError(null);
+    const wallet = await findWallet();
+    if (!wallet) {
+      setStatus("missing");
+      setError("No Midnight wallet found. Install Lace and refresh this page.");
+      return;
+    }
+    try {
+      const connected = await wallet.connect(NETWORK);
+      const { unshieldedAddress } = await connected.getUnshieldedAddress();
+      setApi(connected);
+      setWalletName(wallet.name);
+      setAddress(unshieldedAddress);
+      setStatus("connected");
+      localStorage.setItem(AUTOCONNECT_KEY, "true");
+      await loadBalances(connected).catch(() => undefined);
+    } catch (e) {
+      setStatus("error");
+      setError(`${describe(e)}. Make sure Lace is set to the ${NETWORK} network.`);
+    }
+  }, [loadBalances]);
+
+  const disconnect = useCallback(() => {
+    localStorage.removeItem(AUTOCONNECT_KEY);
+    setApi(null);
+    setAddress(null);
+    setNight(null);
+    setDust(null);
+    setStatus("idle");
+  }, []);
+
+  const refreshBalances = useCallback(async () => {
+    if (api) await loadBalances(api).catch(() => undefined);
+  }, [api, loadBalances]);
+
+  useEffect(() => {
+    if (localStorage.getItem(AUTOCONNECT_KEY) === "true") void connect();
+  }, [connect]);
+
+  const value = useMemo<WalletContextValue>(
+    () => ({ status, api, walletName, address, night, dust, error, connect, disconnect, refreshBalances }),
+    [status, api, walletName, address, night, dust, error, connect, disconnect, refreshBalances],
+  );
+  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
+}
+
+export const useWallet = (): WalletContextValue => {
+  const context = useContext(WalletContext);
+  if (!context) throw new Error("useWallet must be used inside WalletProvider");
+  return context;
+};
