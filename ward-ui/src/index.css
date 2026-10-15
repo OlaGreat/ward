@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-paper: #fbf8f3;
+  --color-ink: #10201f;
+  --color-muted: #5b6b6a;
+  --color-line: #e7e1d6;
+  --color-ward: #0e7c66;
+  --color-ward-dark: #0a5c4c;
+  --color-ward-soft: #e3f2ee;
+  --color-care: #d9604a;
+  --color-care-soft: #fcebe6;
+  --color-gold: #a86b12;
+  --color-gold-soft: #fbf1df;
+  --color-chain: #0c1424;
+  --color-chain-soft: #16213a;
+  --color-chain-line: #24324f;
+
+  --shadow-card: 0 1px 2px rgb(16 32 31 / 0.04), 0 8px 24px -12px rgb(16 32 31 / 0.12);
+}
+
+@layer base {
+  body {
+    @apply bg-paper font-sans text-ink antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+  ::selection {
+    @apply bg-ward-soft text-ward-dark;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}

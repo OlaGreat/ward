@@ -62,3 +62,8 @@ managed/
 
 # Wallet sync progress (contains key material)
 .wallet-state/
+
+# Proving keys and ZKIR copied from the compiled contract
+ward-ui/public/keys/
+ward-ui/public/zkir/
+.vite/
