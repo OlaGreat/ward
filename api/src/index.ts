@@ -230,6 +230,16 @@ export class WardAPI {
     return new WardAPI(found, providers, initialPrivateState, logger);
   }
 
+  /**
+   * Queries the ledger as it is now. (`state$` starts from the state at the
+   * moment the contract was joined and then follows updates.)
+   */
+  async currentState(): Promise<WardState> {
+    const ledger = await WardAPI.readLedger(this.providers, this.deployedContractAddress);
+    if (!ledger) throw new Error(`No Ward contract found at ${this.deployedContractAddress}`);
+    return deriveWardState(this.deployedContractAddress, ledger, this.#privateState$.value);
+  }
+
   /** Reads the current public state once, without joining. */
   static async readLedger(providers: WardProviders, contractAddress: ContractAddress): Promise<Ward.Ledger | null> {
     const state = await providers.publicDataProvider.queryContractState(contractAddress);
