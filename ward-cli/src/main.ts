@@ -17,7 +17,6 @@ import { parseArgs } from "node:util";
 import { WebSocket } from "ws";
 import pino, { type Logger } from "pino";
 import pinoPretty from "pino-pretty";
-import * as Rx from "rxjs";
 import { NodeZkConfigProvider } from "@midnight-ntwrk/midnight-js-node-zk-config-provider";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
@@ -26,12 +25,14 @@ import { logger as testkitLogger } from "@midnight-ntwrk/testkit-js";
 import {
   BillStatus,
   WardAPI,
+  deriveWardState,
   type PrivateStateId,
   type WardCircuitKeys,
   type WardProviders,
+  type WardState,
 } from "../../api/src/index";
 import { NIGHT_TOKEN, formatNight, fromHex, parseNight, toHex } from "../../api/src/utils/index.js";
-import { type WardPrivateState, pureCircuits } from "../../contract/src/index";
+import { type WardPrivateState, createWardPrivateState, ledger, pureCircuits } from "../../contract/src/index";
 import {
   type NetworkName,
   environment,
@@ -165,10 +166,7 @@ const joinRecorded = (session: Session): Promise<WardAPI> =>
     secretKey: operatorSecret(),
   });
 
-const latestState = (api: WardAPI) => Rx.firstValueFrom(api.state$);
-
-const printStatus = async (api: WardAPI): Promise<void> => {
-  const state = await latestState(api);
+const printStatus = (state: WardState): void => {
   say(`\nWard at ${state.contractAddress}`);
   say(`  bills issued: ${state.billCount}   total donated: ${formatNight(state.totalRaised)} NIGHT`);
   say(`  this CLI is ${state.isOperator ? "" : "not "}the operator`);
@@ -226,6 +224,18 @@ const main = async (): Promise<void> => {
     return;
   }
 
+  // Reading state needs only the indexer, so it skips the (slow) wallet restore.
+  if (command === "status") {
+    const env = environment(network);
+    const { contractAddress } = readDeployment(network);
+    const contractState = await indexerPublicDataProvider(env.indexer, env.indexerWS).queryContractState(
+      contractAddress,
+    );
+    if (!contractState) throw new Error(`No Ward contract found at ${contractAddress}`);
+    printStatus(deriveWardState(contractAddress, ledger(contractState.data), createWardPrivateState(operatorSecret())));
+    return;
+  }
+
   if (command === "whoami") {
     const secret = operatorSecret();
     say(`operator key: ${toHex(pureCircuits.operatorKey(secret))}`);
@@ -262,9 +272,6 @@ const main = async (): Promise<void> => {
         say(`Recorded in ${file}`);
         break;
       }
-      case "status":
-        await printStatus(await joinRecorded(session));
-        break;
       case "register-hospital": {
         const api = await joinRecorded(session);
         const tx = await api.registerHospital(
@@ -313,7 +320,7 @@ const main = async (): Promise<void> => {
       }
       case "smoke-test": {
         const api = await joinRecorded(session);
-        const state = await latestState(api);
+        const state = await api.currentState();
         if (!state.isOperator) throw new Error("The smoke test must run from the operator's CLI");
         if (!state.myHospital) {
           say("1/5 registering this CLI as a test hospital...");
@@ -327,7 +334,7 @@ const main = async (): Promise<void> => {
         await api.donate(bill.billId, parseNight("5"));
         say("5/5 confirming treatment...");
         await api.confirmTreatment(bill.billId);
-        const final = (await latestState(api)).bills.find((b) => b.id === bill.billId);
+        const final = (await api.currentState()).bills.find((b) => b.id === bill.billId);
         say(`\nSmoke test passed: bill ${bill.billId} is ${final ? statusLabel[final.status] : "missing"}`);
         break;
       }
