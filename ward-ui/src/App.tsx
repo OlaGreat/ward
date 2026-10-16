@@ -24,14 +24,25 @@ import { HospitalPage } from "./pages/HospitalPage";
 import { OperatorPage } from "./pages/OperatorPage";
 
 function Footer() {
-  const { contractAddress, provingMode } = useWard();
+  const { contractAddress, provingMode, forgetContract } = useWard();
   return (
     <footer className="mt-24 border-t border-line">
       <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-8 text-sm text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <p>Ward runs on Midnight. Medical details never leave the people they belong to.</p>
-        <p className="font-mono text-xs">
-          {contractAddress ? `contract ${contractAddress.slice(0, 10)}…` : "no instance selected"}
-          {provingMode && ` · proving via ${provingMode === "wallet" ? "Lace" : "proof server"}`}
+        <p className="flex items-center gap-2 font-mono text-xs">
+          <span>
+            {contractAddress ? `contract ${contractAddress.slice(0, 10)}…` : "no instance selected"}
+            {provingMode && ` · proving via ${provingMode === "wallet" ? "Lace" : "proof server"}`}
+          </span>
+          {contractAddress && (
+            <button
+              type="button"
+              onClick={forgetContract}
+              className="rounded-md px-1.5 py-0.5 font-sans font-medium text-ward hover:bg-ward-soft"
+            >
+              Change
+            </button>
+          )}
         </p>
       </div>
     </footer>
