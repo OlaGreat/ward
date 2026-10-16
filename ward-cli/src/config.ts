@@ -98,7 +98,8 @@ export const persistentSecret = (name: string, generate: () => string = () => to
   if (existing) return existing;
   const value = generate();
   const current = existsSync(envFile) ? readFileSync(envFile, "utf8") : "";
-  const line = `${name}=${value}`;
+  // Quoted, so characters like "#" are never read back as the start of a comment.
+  const line = `${name}="${value}"`;
   const updated = new RegExp(`^${name}=.*$`, "m").test(current)
     ? current.replace(new RegExp(`^${name}=.*$`, "m"), line)
     : `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`;
@@ -109,7 +110,8 @@ export const persistentSecret = (name: string, generate: () => string = () => to
 
 /** A random password that meets the private state store's strength policy. */
 export const strongPassword = (): string => {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%^*-_=+";
+  // No "#", quotes or backslashes: they have special meaning in .env files.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@%^*-_=+";
   for (;;) {
     const candidate = Array.from(randomBytes(28), (b) => alphabet[b % alphabet.length]).join("");
     try {
