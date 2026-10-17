@@ -348,10 +348,26 @@ const main = async (): Promise<void> => {
   }
 };
 
+/** The error plus its chain of causes, which often hold the node's actual reason. */
+const describeError = (error: unknown): string => {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current !== undefined && current !== null && depth < 6; depth++) {
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = (current as { cause?: unknown }).cause;
+    } else {
+      parts.push((JSON.stringify(current) ?? "unknown").slice(0, 2000));
+      break;
+    }
+  }
+  return parts.join("\n  caused by: ");
+};
+
 main().then(
   () => process.exit(process.exitCode ?? 0),
   (error: unknown) => {
-    console.error(`\nError: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`\nError: ${describeError(error)}`);
     logger.debug(error);
     process.exit(1);
   },
