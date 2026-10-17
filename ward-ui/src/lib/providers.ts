@@ -32,40 +32,65 @@ export const txStage$ = new BehaviorSubject<TxStage>("idle");
 
 export type ProvingMode = "wallet" | "proof-server";
 
+/** How proofs are currently being made; can switch to the proof server mid-session. */
+export const provingMode$ = new BehaviorSubject<ProvingMode | null>(null);
+
+// Ward's own circuits. The network's built-in circuits are proven with the
+// prover's own keys, so their key material is reported missing, exactly as
+// Midnight's HTTP proof provider does.
+const WARD_CIRCUITS = new Set<string>([
+  "registerHospital",
+  "setHospitalActive",
+  "issueBill",
+  "openFundraiser",
+  "donate",
+  "cancelBill",
+  "confirmTreatment",
+] satisfies WardCircuitKeys[]);
+
+const wardCircuit = (location: string): WardCircuitKeys => {
+  if (!WARD_CIRCUITS.has(location)) throw new Error(`No Ward key material for ${location}`);
+  return location as WardCircuitKeys;
+};
+
 /**
  * Proves through the wallet when it offers a proving provider, so users need
- * no proof server of their own. Falls back to a proof server otherwise.
+ * no proof server of their own. If that is unavailable or fails, a proof
+ * server (the wallet's, or a local one on port 6300) takes over.
  */
 const createProofProvider = async (
   api: ConnectedAPI,
   zkConfig: FetchZkConfigProvider<WardCircuitKeys>,
   proverServerUri: string | undefined,
-): Promise<{ provider: ProofProvider; mode: ProvingMode }> => {
+): Promise<ProofProvider> => {
+  const proofServer = httpClientProofProvider(proverServerUri ?? "http://localhost:6300", zkConfig);
   const keyMaterial: KeyMaterialProvider = {
-    getZKIR: (location) => zkConfig.getZKIR(location as WardCircuitKeys),
-    getProverKey: (location) => zkConfig.getProverKey(location as WardCircuitKeys),
-    getVerifierKey: (location) => zkConfig.getVerifierKey(location as WardCircuitKeys),
+    getZKIR: (location) => zkConfig.getZKIR(wardCircuit(location)),
+    getProverKey: (location) => zkConfig.getProverKey(wardCircuit(location)),
+    getVerifierKey: (location) => zkConfig.getVerifierKey(wardCircuit(location)),
   };
-  try {
-    const proving = await api.getProvingProvider(keyMaterial);
-    return {
-      provider: { proveTx: (tx) => tx.prove(proving, CostModel.initialCostModel()) },
-      mode: "wallet",
-    };
-  } catch {
-    return {
-      provider: httpClientProofProvider(proverServerUri ?? "http://localhost:6300", zkConfig),
-      mode: "proof-server",
-    };
-  }
+  const walletProving = await api.getProvingProvider(keyMaterial).catch(() => undefined);
+  provingMode$.next(walletProving ? "wallet" : "proof-server");
+
+  return {
+    proveTx: async (tx, options) => {
+      if (walletProving && provingMode$.value === "wallet") {
+        try {
+          return await tx.prove(walletProving, CostModel.initialCostModel());
+        } catch (error) {
+          console.warn("Proving through the wallet failed; switching to the proof server", error);
+          provingMode$.next("proof-server");
+        }
+      }
+      return proofServer.proveTx(tx, options);
+    },
+  };
 };
 
-export const createWardProviders = async (
-  api: ConnectedAPI,
-): Promise<{ providers: WardProviders; provingMode: ProvingMode }> => {
+export const createWardProviders = async (api: ConnectedAPI): Promise<WardProviders> => {
   const config = await api.getConfiguration();
   const zkConfig = new FetchZkConfigProvider<WardCircuitKeys>(window.location.origin, fetch.bind(window));
-  const { provider: proofProvider, mode } = await createProofProvider(api, zkConfig, config.proverServerUri);
+  const proofProvider = await createProofProvider(api, zkConfig, config.proverServerUri);
   const addresses = await api.getShieldedAddresses();
 
   const providers: WardProviders = {
@@ -101,5 +126,5 @@ export const createWardProviders = async (
       },
     },
   };
-  return { providers, provingMode: mode };
+  return providers;
 };

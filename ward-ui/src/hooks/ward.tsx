@@ -16,7 +16,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { WardAPI, type WardProviders, type WardState } from "../../../api/src/index";
 import { NIGHT_TOKEN } from "../../../api/src/utils/index";
-import { createWardProviders, txStage$, type ProvingMode, type TxStage } from "../lib/providers";
+import { createWardProviders, provingMode$, txStage$, type ProvingMode, type TxStage } from "../lib/providers";
 import { useWallet } from "./wallet";
 
 const CONTRACT_KEY = "ward:v1:contract";
@@ -72,6 +72,8 @@ export function WardProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<WardState | null>(null);
   const [provingMode, setProvingMode] = useState<ProvingMode | null>(null);
+  // Bumped each time providers are rebuilt, so the contract is (re)joined.
+  const [providersVersion, setProvidersVersion] = useState(0);
   const [activeTx, setActiveTx] = useState<ActiveTx | null>(null);
   const apiRef = useRef<WardAPI | null>(null);
   const providersRef = useRef<WardProviders | null>(null);
@@ -87,10 +89,10 @@ export function WardProvider({ children }: { children: ReactNode }) {
     }
     let cancelled = false;
     createWardProviders(wallet.api)
-      .then(({ providers, provingMode: mode }) => {
+      .then((providers) => {
         if (cancelled) return;
         providersRef.current = providers;
-        setProvingMode(mode);
+        setProvidersVersion((version) => version + 1);
         setStatus(contractAddress ? "joining" : "needs-contract");
       })
       .catch((e: unknown) => {
@@ -138,7 +140,12 @@ export function WardProvider({ children }: { children: ReactNode }) {
       unsubscribe?.();
     };
     // Re-join only when the address or the providers change, not on every status update.
-  }, [contractAddress, provingMode]);
+  }, [contractAddress, providersVersion]);
+
+  useEffect(() => {
+    const subscription = provingMode$.subscribe(setProvingMode);
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const subscription = txStage$.subscribe((stage) =>
