@@ -109,9 +109,10 @@ Hospital, patient and donor actions (signed by this CLI)
 
   smoke-test              Run the full flow on the network: register this CLI as a
                           hospital, issue a bill, open the fundraiser, donate, confirm
-  demo [--amount <NIGHT>] [--title <text>]
+  demo [--amount <NIGHT>] [--title <text>] [--bill <id>]
                           Issue a bill and open its fundraiser, then donate in two
                           steps, pausing before each so the web app can be watched
+                          (--bill resumes with a fundraiser that is already open)
 
 Configuration lives in ward-cli/.env (see .env.example). WARD_NETWORK selects
 preprod (default), preview or undeployed.`;
@@ -407,20 +408,31 @@ const main = async (): Promise<void> => {
       }
       case "demo": {
         const api = await joinRecorded(session);
-        const amount = parseNight(typeof values.amount === "string" ? values.amount : "30");
-        const title = typeof values.title === "string" ? values.title : "Heart surgery for Tobi, age 7";
-        say(`Issuing a ${formatNight(amount)} NIGHT bill...`);
-        const bill = await api.issueBill(amount);
-        say(`Bill ${bill.billId} issued (tx ${bill.txHash})`);
-        say(`Claim page: ${DEMO_APP}/#/claim/${bill.claim}`);
-        say("Opening the fundraiser with the claim...");
-        say(`Fundraiser opened (tx ${await api.openFundraiser(bill.claim, title)})`);
-        say(`Fundraiser page: ${DEMO_APP}/#/f/${bill.billId}`);
+        let billId: string;
+        let amount: bigint;
+        if (typeof values.bill === "string") {
+          // Resume with a fundraiser that is already open.
+          billId = values.bill;
+          const existing = (await api.currentState()).bills.find((b) => b.id === billId);
+          if (!existing) throw new Error(`No bill ${billId} in this Ward instance`);
+          amount = existing.amountDue - existing.raised;
+        } else {
+          amount = parseNight(typeof values.amount === "string" ? values.amount : "30");
+          const title = typeof values.title === "string" ? values.title : "Heart surgery for Tobi, age 7";
+          say(`Issuing a ${formatNight(amount)} NIGHT bill...`);
+          const bill = await api.issueBill(amount);
+          billId = bill.billId;
+          say(`Bill ${bill.billId} issued (tx ${bill.txHash})`);
+          say(`Claim page: ${DEMO_APP}/#/claim/${bill.claim}`);
+          say("Opening the fundraiser with the claim...");
+          say(`Fundraiser opened (tx ${await api.openFundraiser(bill.claim, title)})`);
+        }
+        say(`Fundraiser page: ${DEMO_APP}/#/f/${billId}`);
         const first = amount / 3n;
         await waitForCue(`donate ${formatNight(first)} NIGHT`);
-        say(`Donation sent to the hospital (tx ${await api.donate(bill.billId, first)})`);
+        say(`Donation sent to the hospital (tx ${await api.donate(billId, first)})`);
         await waitForCue(`donate the remaining ${formatNight(amount - first)} NIGHT`);
-        say(`Donation sent to the hospital (tx ${await api.donate(bill.billId, amount - first)})`);
+        say(`Donation sent to the hospital (tx ${await api.donate(billId, amount - first)})`);
         say("The bill is fully funded.");
         break;
       }
