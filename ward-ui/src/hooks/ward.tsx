@@ -96,20 +96,24 @@ export function WardProvider({ children }: { children: ReactNode }) {
         return;
       }
       const viewer = createWardPrivateState(new Uint8Array(32));
-      const subscription = indexerPublicDataProvider(
+      const publicData = indexerPublicDataProvider(
         indexer,
         indexerWs,
         WebSocket as unknown as Parameters<typeof indexerPublicDataProvider>[2],
-      )
-        .contractStateObservable(contractAddress, { type: "latest" })
-        .subscribe({
-          next: (contractState) => {
+      );
+      // Poll over HTTPS: browser WebSockets to the hosted indexer are unreliable.
+      const refresh = () =>
+        publicData
+          .queryContractState(contractAddress)
+          .then((contractState) => {
+            if (!contractState) return;
             setState(deriveWardState(contractAddress, ledger(contractState.data), viewer));
             setStatus("ready");
-          },
-          error: () => setStatus("needs-wallet"),
-        });
-      return () => subscription.unsubscribe();
+          })
+          .catch(() => undefined);
+      void refresh();
+      const timer = setInterval(() => void refresh(), 5_000);
+      return () => clearInterval(timer);
     }
     let cancelled = false;
     createWardProviders(wallet.api)

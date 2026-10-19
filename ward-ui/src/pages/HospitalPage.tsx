@@ -317,7 +317,24 @@ function Dashboard({ state }: { state: WardState }) {
 
 function HospitalContent() {
   const { state } = useWard();
+  const wallet = useWallet();
   if (!state) return null;
+  // A hospital acts through the secret stored in this browser, so it needs the wallet connected.
+  if (wallet.status !== "connected") {
+    return (
+      <Card className="mx-auto max-w-xl p-6 text-center">
+        <p className="text-muted">Connect Lace to issue bills and manage them as a hospital.</p>
+        <Button className="mt-4" onClick={() => void wallet.connect()} loading={wallet.status === "connecting"}>
+          Connect Lace
+        </Button>
+        {wallet.error && (
+          <Notice tone="care" className="mt-4 text-left">
+            {wallet.error}
+          </Notice>
+        )}
+      </Card>
+    );
+  }
   return state.myHospital ? <Dashboard state={state} /> : <Onboarding state={state} />;
 }
 
