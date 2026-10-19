@@ -106,12 +106,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       await loadBalances(connected).catch(() => undefined);
     } catch (e) {
       setStatus("error");
-      console.error("Lace connection failed:", e);
-      const message = describe(e);
+      const code = e && typeof e === "object" && "code" in e ? String(e.code) : null;
+      console.error(`Lace connection failed: [${code ?? "no code"}] ${describe(e)}`, e);
+      const message = code ? `${describe(e)} (${code})` : describe(e);
       // A connection made before Lace was unlocked goes stale ("Remote API ... was shutdown").
       setError(
         /shutdown|no longer be used|didn't respond/i.test(message)
-          ? "The link to Lace was reset (this happens after unlocking it). Reload this page, then connect again."
+          ? `The link to Lace was reset (this happens after unlocking it). Reload this page, then connect again. Lace said: ${message}`
           : `${message}. Make sure Lace is unlocked and set to the ${NETWORK} network.`,
       );
     }
