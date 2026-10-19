@@ -194,9 +194,10 @@ const CIRCUIT_METHODS = new Set([
   "confirmTreatment",
 ]);
 
-/** A request that failed before any response arrived (the SDK reports these as "unknown error"). */
+/** A request that failed before any response arrived (the SDK reports these as "unknown error"),
+ * or a fee proof built on DUST state that went stale (node error 170); both succeed on retry. */
 const isDroppedConnection = (error: unknown): boolean =>
-  /unknown error occurred|ECONNRESET|socket hang up|fetch failed|ETIMEDOUT/i.test(describeError(error));
+  /unknown error occurred|ECONNRESET|socket hang up|fetch failed|ETIMEDOUT|Custom error: 170/i.test(describeError(error));
 
 const withRetry = async <T>(label: string, action: () => Promise<T>, attempts = 3): Promise<T> => {
   for (let attempt = 1; ; attempt++) {
