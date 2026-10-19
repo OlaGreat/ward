@@ -106,6 +106,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       await loadBalances(connected).catch(() => undefined);
     } catch (e) {
       setStatus("error");
+      console.error("Lace connection failed:", e);
       const message = describe(e);
       // A connection made before Lace was unlocked goes stale ("Remote API ... was shutdown").
       setError(
