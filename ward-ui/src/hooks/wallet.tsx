@@ -16,7 +16,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConnectedAPI, InitialAPI } from "@midnight-ntwrk/dapp-connector-api";
 
-const AUTOCONNECT_KEY = "ward:v1:autoconnect";
+// Set just before reloading to replace a dead wallet link; the reloaded page connects once.
+const RETRY_KEY = "ward:v1:connect-after-reload";
 const NETWORK = import.meta.env.VITE_NETWORK_ID;
 
 export type WalletStatus = "idle" | "connecting" | "connected" | "missing" | "error";
@@ -102,24 +103,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setWalletName(wallet.name);
       setAddress(unshieldedAddress);
       setStatus("connected");
-      localStorage.setItem(AUTOCONNECT_KEY, "true");
       await loadBalances(connected).catch(() => undefined);
     } catch (e) {
       setStatus("error");
       const code = e && typeof e === "object" && "code" in e ? String(e.code) : null;
       console.error(`Lace connection failed: [${code ?? "no code"}] ${describe(e)}`, e);
       const message = code ? `${describe(e)} (${code})` : describe(e);
+      // Lace retires the object it injected after a failed attempt ("Remote API ... was shutdown").
+      // Only a page reload gets a fresh one, so reload once and connect again.
+      if (/shutdown|no longer be used/i.test(message) && !sessionStorage.getItem(RETRY_KEY)) {
+        sessionStorage.setItem(RETRY_KEY, "true");
+        window.location.reload();
+        return;
+      }
       // A connection made before Lace was unlocked goes stale ("Remote API ... was shutdown").
       setError(
         /shutdown|no longer be used|didn't respond/i.test(message)
-          ? `The link to Lace was reset (this happens after unlocking it). Reload this page, then connect again. Lace said: ${message}`
+          ? `Lace stopped responding to this page. Unlock Lace, reload this page, then connect again. Lace said: ${message}`
           : `${message}. Make sure Lace is unlocked and set to the ${NETWORK} network.`,
       );
     }
   }, [loadBalances]);
 
   const disconnect = useCallback(() => {
-    localStorage.removeItem(AUTOCONNECT_KEY);
     setApi(null);
     setAddress(null);
     setNight(null);
@@ -131,8 +137,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (api) await loadBalances(api).catch(() => undefined);
   }, [api, loadBalances]);
 
+  // Connecting on page load while Lace is locked makes Lace retire its connector,
+  // so only connect when asked, or once after a reload that replaced a dead link.
   useEffect(() => {
-    if (localStorage.getItem(AUTOCONNECT_KEY) === "true") void connect();
+    if (!sessionStorage.getItem(RETRY_KEY)) return;
+    void connect().finally(() => sessionStorage.removeItem(RETRY_KEY));
   }, [connect]);
 
   const value = useMemo<WalletContextValue>(
