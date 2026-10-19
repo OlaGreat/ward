@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { existsSync, rmSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { WebSocket } from "ws";
 import pino, { type Logger } from "pino";
@@ -107,9 +109,29 @@ Hospital, patient and donor actions (signed by this CLI)
 
   smoke-test              Run the full flow on the network: register this CLI as a
                           hospital, issue a bill, open the fundraiser, donate, confirm
+  demo [--amount <NIGHT>] [--title <text>]
+                          Issue a bill and open its fundraiser, then donate in two
+                          steps, pausing before each so the web app can be watched
 
 Configuration lives in ward-cli/.env (see .env.example). WARD_NETWORK selects
 preprod (default), preview or undeployed.`;
+
+const DEMO_APP = process.env.WARD_APP_URL ?? "http://localhost:5173";
+const DEMO_CUE = ".demo-next";
+
+/** Waits for Enter in a terminal, or for the cue file to appear when run unattended. */
+const waitForCue = async (next: string): Promise<void> => {
+  if (process.stdin.isTTY) {
+    say(`\nPress Enter to ${next}.`);
+    const rl = createInterface({ input: process.stdin });
+    await new Promise<void>((resolve) => rl.once("line", () => resolve()));
+    rl.close();
+    return;
+  }
+  say(`\nWaiting to ${next} (create ward-cli/${DEMO_CUE} to continue)...`);
+  while (!existsSync(DEMO_CUE)) await new Promise((resolve) => setTimeout(resolve, 1_000));
+  rmSync(DEMO_CUE);
+};
 
 const operatorSecret = (): Uint8Array => fromHex(persistentSecret("WARD_OPERATOR_SECRET"));
 
@@ -381,6 +403,25 @@ const main = async (): Promise<void> => {
         await api.confirmTreatment(bill.billId);
         const final = (await api.currentState()).bills.find((b) => b.id === bill.billId);
         say(`\nSmoke test passed: bill ${bill.billId} is ${final ? statusLabel[final.status] : "missing"}`);
+        break;
+      }
+      case "demo": {
+        const api = await joinRecorded(session);
+        const amount = parseNight(typeof values.amount === "string" ? values.amount : "30");
+        const title = typeof values.title === "string" ? values.title : "Heart surgery for Tobi, age 7";
+        say(`Issuing a ${formatNight(amount)} NIGHT bill...`);
+        const bill = await api.issueBill(amount);
+        say(`Bill ${bill.billId} issued (tx ${bill.txHash})`);
+        say(`Claim page: ${DEMO_APP}/#/claim/${bill.claim}`);
+        say("Opening the fundraiser with the claim...");
+        say(`Fundraiser opened (tx ${await api.openFundraiser(bill.claim, title)})`);
+        say(`Fundraiser page: ${DEMO_APP}/#/f/${bill.billId}`);
+        const first = amount / 3n;
+        await waitForCue(`donate ${formatNight(first)} NIGHT`);
+        say(`Donation sent to the hospital (tx ${await api.donate(bill.billId, first)})`);
+        await waitForCue(`donate the remaining ${formatNight(amount - first)} NIGHT`);
+        say(`Donation sent to the hospital (tx ${await api.donate(bill.billId, amount - first)})`);
+        say("The bill is fully funded.");
         break;
       }
       default:

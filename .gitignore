@@ -70,3 +70,4 @@ ward-ui/public/zkir/
 
 # Local-only environment overrides (may hold API keys)
 *.local
+ward-cli/.demo-next
