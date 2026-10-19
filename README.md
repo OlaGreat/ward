@@ -137,6 +137,15 @@ A new wallet's first sync on Preprod replays about 1.6 million DUST events and t
 | 4. Donate 5 NIGHT, forwarded to the hospital | `donate` | `82defc855908e770a7e3a799a60fe3f3e16cea9ba02588b3a39814a41ad70bc9` | 3,002,878 |
 | 5. Confirm treatment | `confirmTreatment` | `94c3a7d00836be338bc509b8236325b1b4cd19ac935827298f9db60e502d2796` | 3,002,883 |
 
+The demo in the video funded a second, 30 NIGHT bill in two donations (`npm run ward -- demo`):
+
+| Step | Circuit | Transaction | Block |
+| --- | --- | --- | --- |
+| Issue a 30 NIGHT bill | `issueBill` | `4c7827713311d633786b68794f78aed8e58242b83cfa21b7eb65bb229b327be1` | 3,048,290 |
+| Open "Heart surgery for Tobi, age 7" | `openFundraiser` | `d9c273723bd229c6a31293ed9831b9a05e1102b2108482869e40ae8803230d62` | 3,048,295 |
+| Donate 10 NIGHT | `donate` | `0b9e7aca161303985f8efca098eaf4683fe072570dc7650776350ebbcf8b8160` | 3,049,316 |
+| Donate the remaining 20 NIGHT | `donate` | `4f1bf803086dc5b266c2e94a5570c07bc215e5a9fffefaa20d99c6917ffcf763` | 3,049,336 |
+
 ## Roadmap
 
 - **Private donations with provable receipts.** Shielded donations, plus receipts that prove "I donated X to a verified medical bill" without revealing which patient, for tax deductions or employer matching.
