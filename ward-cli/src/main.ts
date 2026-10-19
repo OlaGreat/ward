@@ -161,10 +161,55 @@ const openSession = async (network: NetworkName): Promise<Session> => {
   return { network, wallet, providers };
 };
 
-const joinRecorded = (session: Session): Promise<WardAPI> =>
-  WardAPI.join(session.providers, readDeployment(session.network).contractAddress, logger, {
-    secretKey: operatorSecret(),
+const CIRCUIT_METHODS = new Set([
+  "registerHospital",
+  "setHospitalActive",
+  "issueBill",
+  "openFundraiser",
+  "donate",
+  "cancelBill",
+  "confirmTreatment",
+]);
+
+/** A request that failed before any response arrived (the SDK reports these as "unknown error"). */
+const isDroppedConnection = (error: unknown): boolean =>
+  /unknown error occurred|ECONNRESET|socket hang up|fetch failed|ETIMEDOUT/i.test(describeError(error));
+
+const withRetry = async <T>(label: string, action: () => Promise<T>, attempts = 3): Promise<T> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await action();
+    } catch (error) {
+      if (attempt >= attempts || !isDroppedConnection(error)) throw error;
+      logger.warn(`${label} hit a dropped connection (attempt ${attempt} of ${attempts}); retrying in 10 seconds`);
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+    }
+  }
+};
+
+/**
+ * Retries contract calls that fail on a dropped connection. These are common
+ * right after the slow wallet restore, which stalls the process for minutes.
+ * A retry after a call that did land fails on the contract's own checks.
+ */
+const resilient = (api: WardAPI): WardAPI =>
+  new Proxy(api, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property);
+      if (typeof value !== "function") return value;
+      const method = (value as (...args: unknown[]) => unknown).bind(target);
+      return typeof property === "string" && CIRCUIT_METHODS.has(property)
+        ? (...args: unknown[]) => withRetry(property, () => Promise.resolve(method(...args)))
+        : method;
+    },
   });
+
+const joinRecorded = async (session: Session): Promise<WardAPI> =>
+  resilient(
+    await WardAPI.join(session.providers, readDeployment(session.network).contractAddress, logger, {
+      secretKey: operatorSecret(),
+    }),
+  );
 
 const printStatus = (state: WardState): void => {
   say(`\nWard at ${state.contractAddress}`);
