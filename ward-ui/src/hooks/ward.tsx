@@ -14,7 +14,10 @@
 // limitations under the License.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { WardAPI, type WardProviders, type WardState } from "../../../api/src/index";
+import { WardAPI, deriveWardState, type WardProviders, type WardState } from "../../../api/src/index";
+import { ledger } from "../../../contract/src/managed/ward/contract/index.js";
+import { createWardPrivateState } from "../../../contract/src/witnesses";
+import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { NIGHT_TOKEN } from "../../../api/src/utils/index";
 import { createWardProviders, provingMode$, txStage$, type ProvingMode, type TxStage } from "../lib/providers";
 import { useWallet } from "./wallet";
@@ -84,8 +87,29 @@ export function WardProvider({ children }: { children: ReactNode }) {
     apiRef.current = null;
     setState(null);
     if (wallet.status !== "connected" || !wallet.api) {
-      setStatus("needs-wallet");
-      return;
+      // Optional read-only mode for local demos: with an indexer configured in
+      // .env.preprod.local, fundraisers are shown before a wallet connects.
+      const indexer = import.meta.env.VITE_INDEXER_URI;
+      const indexerWs = import.meta.env.VITE_INDEXER_WS_URI;
+      if (!indexer || !indexerWs || !contractAddress) {
+        setStatus("needs-wallet");
+        return;
+      }
+      const viewer = createWardPrivateState(new Uint8Array(32));
+      const subscription = indexerPublicDataProvider(
+        indexer,
+        indexerWs,
+        WebSocket as unknown as Parameters<typeof indexerPublicDataProvider>[2],
+      )
+        .contractStateObservable(contractAddress, { type: "latest" })
+        .subscribe({
+          next: (contractState) => {
+            setState(deriveWardState(contractAddress, ledger(contractState.data), viewer));
+            setStatus("ready");
+          },
+          error: () => setStatus("needs-wallet"),
+        });
+      return () => subscription.unsubscribe();
     }
     let cancelled = false;
     createWardProviders(wallet.api)

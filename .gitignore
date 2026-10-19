@@ -67,3 +67,6 @@ managed/
 ward-ui/public/keys/
 ward-ui/public/zkir/
 .vite/
+
+# Local-only environment overrides (may hold API keys)
+*.local
