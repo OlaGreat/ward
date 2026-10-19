@@ -87,7 +87,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const connected = await wallet.connect(NETWORK);
+      // Lace waits silently while it is locked, so don't hang forever.
+      const connected = await Promise.race([
+        wallet.connect(NETWORK),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Lace didn't respond. Unlock Lace, reload this page and try again")),
+            90_000,
+          ),
+        ),
+      ]);
       const { unshieldedAddress } = await connected.getUnshieldedAddress();
       setApi(connected);
       setWalletName(wallet.name);
@@ -97,7 +106,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       await loadBalances(connected).catch(() => undefined);
     } catch (e) {
       setStatus("error");
-      setError(`${describe(e)}. Make sure Lace is set to the ${NETWORK} network.`);
+      const message = describe(e);
+      // A connection made before Lace was unlocked goes stale ("Remote API ... was shutdown").
+      setError(
+        /shutdown|no longer be used|didn't respond/i.test(message)
+          ? "The link to Lace was reset (this happens after unlocking it). Reload this page, then connect again."
+          : `${message}. Make sure Lace is unlocked and set to the ${NETWORK} network.`,
+      );
     }
   }, [loadBalances]);
 
