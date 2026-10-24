@@ -17,7 +17,7 @@ import { LogOut, Wallet } from "lucide-react";
 import { useWallet } from "../hooks/wallet";
 import { useWard } from "../hooks/ward";
 import { formatNight, shortAddress } from "../lib/format";
-import { href, type Route } from "../lib/router";
+import { href, scrollTopIfCurrent, type Route } from "../lib/router";
 import { Button, cn } from "./ui";
 
 export function WardMark({ className }: { className?: string }) {
@@ -36,6 +36,7 @@ function NavLink({ to, active, children }: { to: Route; active: boolean; childre
   return (
     <a
       href={href(to)}
+      onClick={scrollTopIfCurrent(to)}
       aria-current={active ? "page" : undefined}
       className={cn(
         "rounded-lg px-3 py-2 text-sm font-medium transition-colors",
@@ -75,7 +76,12 @@ export function Header({ route }: { route: Route }) {
   return (
     <header className="sticky top-0 z-40 border-b border-line/80 bg-paper/85 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4 sm:px-6">
-        <a href={href({ name: "home" })} className="flex items-center gap-2" aria-label="Ward home">
+        <a
+          href={href({ name: "home" })}
+          onClick={scrollTopIfCurrent({ name: "home" })}
+          className="flex items-center gap-2"
+          aria-label="Ward home"
+        >
           <WardMark className="size-8" />
           <span className="font-display text-xl font-semibold">Ward</span>
         </a>

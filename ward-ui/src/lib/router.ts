@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Ward contributors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 
 // Hash-based routes keep the app a static site, and keep claim codes in the
 // URL fragment, which browsers never send to a server.
@@ -40,6 +40,15 @@ export const href = (route: Route): string => {
 /** Absolute link, e.g. for sharing a fundraiser or handing a claim to a patient. */
 export const absoluteHref = (route: Route): string =>
   `${window.location.origin}${window.location.pathname}${window.location.search}${href(route)}`;
+
+/** A link to the page already open doesn't change the hash, so scroll back to the top instead. */
+export const scrollTopIfCurrent =
+  (route: Route) =>
+  (event: MouseEvent<HTMLAnchorElement>): void => {
+    if (href(parseRoute(window.location.hash)) !== href(route)) return;
+    event.preventDefault();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
 export const navigate = (route: Route): void => {
   window.location.hash = href(route);
