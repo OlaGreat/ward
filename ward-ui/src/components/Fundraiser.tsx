@@ -18,6 +18,7 @@ import { BadgeCheck, HeartHandshake, HeartPulse, ShieldCheck } from "lucide-reac
 import { BillStatus, type BillView } from "../../../api/src/index";
 import { useWallet } from "../hooks/wallet";
 import { useWard } from "../hooks/ward";
+import { WalletSubmit } from "./Gates";
 import { formatNight, night, parseNight, percentOf } from "../lib/format";
 import { href } from "../lib/router";
 import { Badge, Button, Card, Field, Modal, Notice, ProgressBar, cn } from "./ui";
@@ -205,9 +206,9 @@ export function DonateDialog({ bill, onClose }: { bill: BillView | null; onClose
             The Ward contract forwards your donation directly to {bill.hospitalName}'s payout address. Ward never holds
             it, and nobody can redirect it to a copied appeal.
           </p>
-          <Button type="submit" size="lg" className="w-full" loading={busy}>
+          <WalletSubmit action="donate" loading={busy}>
             Donate
-          </Button>
+          </WalletSubmit>
         </form>
       )}
     </Modal>

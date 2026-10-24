@@ -192,7 +192,7 @@ export function WardProvider({ children }: { children: ReactNode }) {
   const run = useCallback(
     async <T,>(label: string, action: (api: WardAPI) => Promise<T>): Promise<T> => {
       const api = apiRef.current;
-      if (!api) throw new Error("Connect your wallet and open a Ward instance first.");
+      if (!api) throw new Error("Connect Lace first. If it is connected, wait a moment for Ward to finish loading.");
       txStage$.next("idle");
       setActiveTx({ label, stage: "idle" });
       try {

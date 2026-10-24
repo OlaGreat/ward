@@ -40,20 +40,57 @@ function ConnectPrompt() {
         Connect Lace
       </Button>
       {wallet.status === "missing" && (
-        <p className="mt-4 text-sm text-muted">
-          Get Lace from the{" "}
-          <a
-            className="font-medium text-ward underline"
-            href="https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Chrome Web Store
-          </a>{" "}
-          and switch it to {import.meta.env.VITE_NETWORK_ID}.
-        </p>
+        <div className="mt-4">
+          <GetLace />
+        </div>
       )}
     </Card>
+  );
+}
+
+const GetLace = () => (
+  <p className="text-sm text-muted">
+    Get Lace from the{" "}
+    <a
+      className="font-medium text-ward underline"
+      href="https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk"
+      target="_blank"
+      rel="noreferrer"
+    >
+      Chrome Web Store
+    </a>{" "}
+    and switch it to {import.meta.env.VITE_NETWORK_ID}.
+  </p>
+);
+
+/**
+ * The submit button of a form that sends a transaction. Fundraisers can be read
+ * without a wallet, so until Lace is connected this asks for it instead.
+ */
+export function WalletSubmit({ action, loading, children }: { action: string; loading: boolean; children: ReactNode }) {
+  const wallet = useWallet();
+  if (wallet.status === "connected") {
+    return (
+      <Button type="submit" size="lg" className="w-full" loading={loading}>
+        {children}
+      </Button>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {wallet.error && <Notice tone="care">{wallet.error}</Notice>}
+      <Button
+        type="button"
+        size="lg"
+        className="w-full"
+        onClick={() => void wallet.connect()}
+        loading={wallet.status === "connecting"}
+      >
+        <Wallet className="size-4" aria-hidden />
+        Connect Lace to {action}
+      </Button>
+      {wallet.status === "missing" && <GetLace />}
+    </div>
   );
 }
 

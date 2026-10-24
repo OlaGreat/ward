@@ -18,8 +18,8 @@ import { KeyRound, Lock } from "lucide-react";
 import { BillStatus } from "../../../api/src/index";
 import { decodeClaim, toHex } from "../../../api/src/utils/index";
 import { VerifiedBy } from "../components/Fundraiser";
-import { RequireWard } from "../components/Gates";
-import { Button, Card, CopyButton, Field, Notice } from "../components/ui";
+import { RequireWard, WalletSubmit } from "../components/Gates";
+import { Card, CopyButton, Field, Notice } from "../components/ui";
 import { useWard } from "../hooks/ward";
 import { night } from "../lib/format";
 import { absoluteHref, href, navigate } from "../lib/router";
@@ -48,8 +48,8 @@ function ClaimForm({ claim }: { claim: string }) {
   const bill = state?.bills.find((b) => b.id === decoded.billId);
   if (!bill) {
     return (
-      <Notice tone="gold" title="Bill not found on this Ward instance">
-        Check that the hospital sent you the full link, or ask them which Ward instance they use.
+      <Notice tone="gold" title="Bill not found">
+        This link doesn't match any bill on Ward. Check that the hospital sent you the full link.
       </Notice>
     );
   }
@@ -105,10 +105,10 @@ function ClaimForm({ claim }: { claim: string }) {
           hint="This is the only thing you publish. Avoid your full name and your diagnosis."
           autoFocus
         />
-        <Button type="submit" size="lg" className="w-full" loading={busy}>
+        <WalletSubmit action="open your fundraiser" loading={busy}>
           <KeyRound className="size-4" aria-hidden />
           Open fundraiser
-        </Button>
+        </WalletSubmit>
       </form>
       <div className="flex gap-3 rounded-xl border border-line p-4 text-sm leading-relaxed text-muted">
         <Lock className="mt-0.5 size-4 shrink-0 text-ward" aria-hidden />
