@@ -146,17 +146,24 @@ export function WardProvider({ children }: { children: ReactNode }) {
       .then((api) => {
         if (cancelled) return;
         apiRef.current = api;
+        const show = (next: WardState) => {
+          if (cancelled) return;
+          setState(next);
+          setStatus("ready");
+        };
+        // Live updates arrive over the indexer's WebSocket, which some browsers
+        // can't keep open; polling over HTTPS keeps the page current regardless.
         const subscription = api.state$.subscribe({
-          next: (next) => {
-            setState(next);
-            setStatus("ready");
-          },
-          error: (e: unknown) => {
-            setStatus("error");
-            setError(readableError(e));
-          },
+          next: show,
+          error: (e: unknown) => console.warn("Live contract updates stopped; polling instead", e),
         });
-        unsubscribe = () => subscription.unsubscribe();
+        const poll = () => void api.currentState().then(show, () => undefined);
+        poll();
+        const timer = setInterval(poll, 5_000);
+        unsubscribe = () => {
+          subscription.unsubscribe();
+          clearInterval(timer);
+        };
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -196,6 +203,8 @@ export function WardProvider({ children }: { children: ReactNode }) {
         setActiveTx(null);
         txStage$.next("idle");
         void wallet.refreshBalances();
+        // Show the transaction's effect now rather than at the next poll.
+        void api.currentState().then(setState, () => undefined);
       }
     },
     [wallet],
