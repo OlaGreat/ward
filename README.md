@@ -7,6 +7,8 @@ Ward lets a hospital vouch for a medical bill on-chain, lets the patient raise m
 
 **Live on Midnight Preprod:** contract `e6070a97918b0706e94daf2c41bd88e9262a662ae893b08de516d9af6b70b698` (see [`ward-cli/deployments/preprod.json`](ward-cli/deployments/preprod.json)).
 
+**Demo video:** [youtu.be/Cg0x3ArplR0](https://youtu.be/Cg0x3ArplR0) · **Pitch deck:** [Ward pitch deck (PDF)](https://drive.google.com/file/d/1MxlcB9UZMgIEdEFogQOiMV9Ei1GJSI4m/view)
+
 ## The problem
 
 About 2.1 billion people face financial hardship paying for healthcare ([WHO and World Bank, 2025](https://www.who.int/news/item/06-12-2025-most-countries-make-progress-towards-universal-health-coverage-but-major-challenges-remain-who-world-bank-report-finds)), and medical needs make up roughly a third of the money raised on crowdfunding platforms. Medical fundraising forces a cruel trade:
@@ -137,7 +139,7 @@ A new wallet's first sync on Preprod replays about 1.6 million DUST events and t
 | 4. Donate 5 NIGHT, forwarded to the hospital | `donate` | `82defc855908e770a7e3a799a60fe3f3e16cea9ba02588b3a39814a41ad70bc9` | 3,002,878 |
 | 5. Confirm treatment | `confirmTreatment` | `94c3a7d00836be338bc509b8236325b1b4cd19ac935827298f9db60e502d2796` | 3,002,883 |
 
-The demo in the video funded a second, 30 NIGHT bill in two donations (`npm run ward -- demo`):
+The demo in the [video](https://youtu.be/Cg0x3ArplR0) funded a second, 30 NIGHT bill in two donations (`npm run ward -- demo`):
 
 | Step | Circuit | Transaction | Block |
 | --- | --- | --- | --- |
