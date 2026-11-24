@@ -159,28 +159,68 @@ const dustTimelineStart = async (indexerWsUrl: string, boundary: bigint) => {
   });
 };
 
-/** Lets a fresh wallet start its dust sync at the ledger 9 boundary (see {@link dustTimelineStart}). */
-const startDustAtLedger9 = (builder: FluentWalletBuilder, indexerWsUrl: string): void => {
-  const config = (builder as unknown as { config: Record<string, unknown> & { forks: { v9: bigint } } }).config;
-  config.dustTimelineStartProbe = () => dustTimelineStart(indexerWsUrl, BigInt(config.forks.v9));
+type DustBoundary = { cursor: bigint; version: bigint };
+
+/**
+ * The ledger 9 boundary of the dust timeline, found once and then read from `cacheFile`:
+ * it is a fixed point in the chain's history, and the wallet waits only 30 s for it.
+ */
+const loadDustBoundary = async (
+  indexerWsUrl: string,
+  boundaryVersion: bigint,
+  cacheFile: string | undefined,
+): Promise<DustBoundary | undefined> => {
+  if (cacheFile && existsSync(cacheFile)) {
+    const cached = JSON.parse(readFileSync(cacheFile, "utf8")) as { cursor: string; version: string };
+    return { cursor: BigInt(cached.cursor), version: BigInt(cached.version) };
+  }
+  const found = await dustTimelineStart(indexerWsUrl, boundaryVersion).catch(() => Option.none());
+  if (Option.isNone(found)) return undefined;
+  const boundary = { cursor: found.value.cursor, version: BigInt(found.value.version) };
+  if (cacheFile) {
+    mkdirSync(path.dirname(cacheFile), { recursive: true, mode: 0o700 });
+    writeFileSync(cacheFile, JSON.stringify({ cursor: String(boundary.cursor), version: String(boundary.version) }));
+  }
+  return boundary;
+};
+
+/** Lets a fresh wallet start its dust sync at the ledger 9 boundary instead of replaying ledger 8. */
+const startDustAt = (builder: FluentWalletBuilder, boundary: DustBoundary): void => {
+  const config = (builder as unknown as { config: Record<string, unknown> }).config;
+  config.dustTimelineStartProbe = () =>
+    Promise.resolve(
+      Option.some({ cursor: boundary.cursor, version: ProtocolVersion.ProtocolVersion(boundary.version) }),
+    );
+};
+
+/** The dust event a saved dust wallet resumes from. */
+const savedDustOffset = (dust: string): bigint | undefined => {
+  const match = /"offset"\s*:\s*"?(\d+)/.exec(dust);
+  return match ? BigInt(match[1]) : undefined;
 };
 
 /** The three sub-wallets restored from a saved state, configured as testkit configures new ones. */
-const restoreFacade = async (builder: FluentWalletBuilder, saved: SavedWalletState): Promise<WalletFacade> => {
+const restoreFacade = async (
+  builder: FluentWalletBuilder,
+  saved: SavedWalletState,
+  freshDust?: WalletFacade["dust"],
+): Promise<WalletFacade> => {
   const config = (builder as unknown as { config: Parameters<typeof ShieldedWallet>[0] }).config;
   const shielded = ShieldedWallet(config).restore(saved.shielded);
   const unshielded = UnshieldedWallet({
     ...config,
     txHistoryStorage: new InMemoryTransactionHistoryStorage(WalletEntrySchema, mergeWalletEntries),
   }).restore(saved.unshielded);
-  const dust = DustWallet({
-    ...config,
-    costParameters: {
-      ledgerParams: DEFAULT_DUST_OPTIONS.ledgerParams,
-      additionalFeeOverhead: DEFAULT_DUST_OPTIONS.additionalFeeOverhead,
-      feeBlocksMargin: DEFAULT_DUST_OPTIONS.feeBlocksMargin,
-    },
-  } as Parameters<typeof DustWallet>[0]).restore(saved.dust);
+  const dust =
+    freshDust ??
+    DustWallet({
+      ...config,
+      costParameters: {
+        ledgerParams: DEFAULT_DUST_OPTIONS.ledgerParams,
+        additionalFeeOverhead: DEFAULT_DUST_OPTIONS.additionalFeeOverhead,
+        feeBlocksMargin: DEFAULT_DUST_OPTIONS.feeBlocksMargin,
+      },
+    } as Parameters<typeof DustWallet>[0]).restore(saved.dust);
   return WalletFacade.init({
     configuration: config as Parameters<typeof WalletFacade.init>[0]["configuration"],
     shielded: () => shielded,
@@ -218,7 +258,14 @@ export class DeployerWallet {
     stateFile?: string,
   ): Promise<DeployerWallet> {
     const builder = FluentWalletBuilder.forEnvironment(env).withSeed(seed);
-    startDustAtLedger9(builder, env.indexerWS);
+    const forks = (builder as unknown as { config: { forks: { v9: bigint } } }).config.forks;
+    const boundary = await loadDustBoundary(
+      env.indexerWS,
+      BigInt(forks.v9),
+      stateFile && path.join(path.dirname(stateFile), `dust-boundary-${path.basename(stateFile)}`),
+    );
+    if (boundary) startDustAt(builder, boundary);
+    else logger.warn("Could not find the ledger 9 dust boundary; a fresh dust sync replays ledger 8.");
     const { wallet: fresh, seeds, keystore } = await builder.buildWithoutStarting();
     let wallet = fresh;
     if (stateFile && existsSync(stateFile)) {
@@ -228,7 +275,12 @@ export class DeployerWallet {
         if (mismatch) {
           logger.warn(`Not resuming saved wallet state: ${mismatch}. Syncing from the start.`);
         } else {
-          wallet = await restoreFacade(builder, saved);
+          // A dust state saved before the boundary was still replaying ledger 8: start dust afresh at
+          // the boundary and keep the shielded and unshielded progress.
+          const dustOffset = savedDustOffset(saved.dust);
+          const restartDust = boundary !== undefined && dustOffset !== undefined && dustOffset < boundary.cursor;
+          if (restartDust) logger.info("Restarting the dust sync at the ledger 9 boundary.");
+          wallet = await restoreFacade(builder, saved, restartDust ? fresh.dust : undefined);
           logger.info(`Resuming wallet sync from block ${saved.chain.height}`);
         }
       } catch (error) {
