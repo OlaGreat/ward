@@ -34,6 +34,10 @@ import {
   WalletFacade,
 } from "@midnightntwrk/wallet-sdk";
 import * as Rx from "rxjs";
+import { Option } from "effect";
+import { createClient } from "graphql-ws";
+import { WebSocket } from "ws";
+import { ProtocolVersion } from "@midnightntwrk/wallet-sdk-abstractions";
 import type { Logger } from "pino";
 
 export type Balances = { readonly night: bigint; readonly dust: bigint };
@@ -87,13 +91,78 @@ const checkChainStamp = async (indexerHttpUrl: string, stamp: ChainStamp): Promi
   return null;
 };
 
+type DustEvent = { id: number; maxId: number; protocolVersion: number };
+
+/** The first dust event at or after `id` (the subscription's first message), over the indexer's WebSocket. */
+const dustEventFrom = (indexerWsUrl: string, id: number | null): Promise<DustEvent> =>
+  new Promise((resolve, reject) => {
+    const client = createClient({ url: indexerWsUrl, webSocketImpl: WebSocket, shouldRetry: () => false });
+    const timer = setTimeout(() => {
+      void client.dispose();
+      reject(new Error(`No dust event from the indexer at ${id ?? "the start"} within 15 s`));
+    }, 15_000);
+    const unsubscribe = client.subscribe<{ dustLedgerEvents: DustEvent }>(
+      { query: "subscription($id: Int) { dustLedgerEvents(id: $id) { id maxId protocolVersion } }", variables: { id } },
+      {
+        next: (result) => {
+          clearTimeout(timer);
+          unsubscribe();
+          void client.dispose();
+          if (result.data) resolve(result.data.dustLedgerEvents);
+          else reject(new Error(`Indexer error reading dust events: ${JSON.stringify(result.errors)}`));
+        },
+        error: (error) => {
+          clearTimeout(timer);
+          void client.dispose();
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+        complete: () => undefined,
+      },
+    );
+  });
+
 /**
- * A fresh wallet on a chain that crossed the ledger 9 upgrade can start at the upgrade
- * instead of replaying every ledger 8 DUST event. testkit keeps the builder's
- * configuration private, so the flag is set there (as midnight-examples does).
+ * Where the dust event timeline crosses into ledger 9, so a fresh wallet starts there instead
+ * of replaying every ledger 8 dust event (about 1.8 million on Preprod).
+ *
+ * Wallet SDK 2.0.1 has the same search behind `skipLedgerV8DustHistory`, but against
+ * Blockfrost's Preprod indexer it returns no answer, and a fresh sync then replays the
+ * whole ledger 8 history. This runs the same binary search over the same subscription.
  */
-const skipLedgerV8DustHistory = (builder: FluentWalletBuilder): void => {
-  (builder as unknown as { config: { skipLedgerV8DustHistory?: boolean } }).config.skipLedgerV8DustHistory = true;
+const dustTimelineStart = async (indexerWsUrl: string, boundary: bigint) => {
+  const first = await dustEventFrom(indexerWsUrl, null);
+  const last = await dustEventFrom(indexerWsUrl, first.maxId);
+  if (BigInt(first.protocolVersion) >= boundary || BigInt(last.protocolVersion) < boundary) return Option.none();
+  // Invariant: every event below `low` is below the boundary, and `atHigh` (the first event
+  // from `high`) is not. Each round probes several points at once, so the search needs
+  // about 7 rounds instead of 23 one-at-a-time probes (the wallet waits 30 s for an answer).
+  let low = first.id + 1;
+  let high = last.id;
+  let atHigh = last;
+  while (low < high) {
+    const step = Math.max(1, Math.ceil((high - low) / 8));
+    const points: number[] = [];
+    for (let at = low; at < high; at += step) points.push(at);
+    const probed = await Promise.all(points.map((at) => dustEventFrom(indexerWsUrl, at)));
+    const firstAtBoundary = probed.findIndex((event) => BigInt(event.protocolVersion) >= boundary);
+    if (firstAtBoundary === -1) {
+      low = Math.max(low + 1, probed[probed.length - 1].id + 1);
+      continue;
+    }
+    high = points[firstAtBoundary];
+    atHigh = probed[firstAtBoundary];
+    if (firstAtBoundary > 0) low = Math.max(low, probed[firstAtBoundary - 1].id + 1);
+  }
+  return Option.some({
+    cursor: BigInt(low - 1),
+    version: ProtocolVersion.ProtocolVersion(BigInt(atHigh.protocolVersion)),
+  });
+};
+
+/** Lets a fresh wallet start its dust sync at the ledger 9 boundary (see {@link dustTimelineStart}). */
+const startDustAtLedger9 = (builder: FluentWalletBuilder, indexerWsUrl: string): void => {
+  const config = (builder as unknown as { config: Record<string, unknown> & { forks: { v9: bigint } } }).config;
+  config.dustTimelineStartProbe = () => dustTimelineStart(indexerWsUrl, BigInt(config.forks.v9));
 };
 
 /** The three sub-wallets restored from a saved state, configured as testkit configures new ones. */
@@ -149,7 +218,7 @@ export class DeployerWallet {
     stateFile?: string,
   ): Promise<DeployerWallet> {
     const builder = FluentWalletBuilder.forEnvironment(env).withSeed(seed);
-    skipLedgerV8DustHistory(builder);
+    startDustAtLedger9(builder, env.indexerWS);
     const { wallet: fresh, seeds, keystore } = await builder.buildWithoutStarting();
     let wallet = fresh;
     if (stateFile && existsSync(stateFile)) {
