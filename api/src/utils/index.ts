@@ -15,7 +15,7 @@
 
 import { Buffer } from "buffer";
 import { MidnightBech32m, UnshieldedAddress } from "@midnight-ntwrk/wallet-sdk-address-format";
-import type { NetworkId } from "@midnight-ntwrk/midnight-js-network-id";
+import type { NetworkId } from "@midnight-ntwrk/midnight-js-types";
 
 export const randomBytes = (length: number): Uint8Array => {
   const bytes = new Uint8Array(length);

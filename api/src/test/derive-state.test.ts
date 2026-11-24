@@ -14,14 +14,11 @@
 // limitations under the License.
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { BillStatus, pureCircuits } from "../../../contract/src/managed/ward/contract/index.js";
 import { createWardPrivateState, withClaimCode } from "../../../contract/src/witnesses.js";
 import { WardSimulator } from "../../../contract/src/test/ward-simulator.js";
 import { deriveWardState } from "../index.js";
 import { NIGHT_TOKEN, formatUnshieldedAddress, parseUnshieldedAddress, randomBytes, toHex } from "../utils/index.js";
-
-setNetworkId("undeployed");
 
 describe("deriveWardState", () => {
   const operator = createWardPrivateState(randomBytes(32));
@@ -31,9 +28,9 @@ describe("deriveWardState", () => {
   let billId: Uint8Array;
   let code: Uint8Array;
 
-  beforeEach(() => {
-    sim = new WardSimulator(operator.secretKey, NIGHT_TOKEN);
-    sim.registerHospital(
+  beforeEach(async () => {
+    sim = await WardSimulator.create(operator.secretKey, NIGHT_TOKEN);
+    await sim.registerHospital(
       operator,
       pureCircuits.hospitalKey(hospital.secretKey),
       "St. Mercy Medical Centre",
@@ -41,16 +38,16 @@ describe("deriveWardState", () => {
     );
     billId = randomBytes(32);
     code = randomBytes(32);
-    sim.issueBill(hospital, billId, 2_400_000_000n, code);
+    await sim.issueBill(hospital, billId, 2_400_000_000n, code);
   });
 
   it("recognises the operator only on the operator's device", () => {
-    expect(deriveWardState("addr", sim.getLedger(), operator).isOperator).toBe(true);
-    expect(deriveWardState("addr", sim.getLedger(), hospital).isOperator).toBe(false);
+    expect(deriveWardState("addr", sim.getLedger(), operator, "undeployed").isOperator).toBe(true);
+    expect(deriveWardState("addr", sim.getLedger(), hospital, "undeployed").isOperator).toBe(false);
   });
 
   it("shows a hospital its own registration and the bills it issued", () => {
-    const view = deriveWardState("addr", sim.getLedger(), hospital);
+    const view = deriveWardState("addr", sim.getLedger(), hospital, "undeployed");
     expect(view.myHospital?.name).toBe("St. Mercy Medical Centre");
     expect(view.myHospital?.payoutAddress).toBe(payout);
     expect(view.bills).toHaveLength(1);
@@ -61,16 +58,16 @@ describe("deriveWardState", () => {
 
   it("knows which bills this device holds a claim code for", () => {
     const patient = withClaimCode(createWardPrivateState(randomBytes(32)), billId, code);
-    expect(deriveWardState("addr", sim.getLedger(), patient).bills[0].claimCodeOnDevice).toBe(true);
-    expect(deriveWardState("addr", sim.getLedger(), hospital).bills[0].claimCodeOnDevice).toBe(false);
+    expect(deriveWardState("addr", sim.getLedger(), patient, "undeployed").bills[0].claimCodeOnDevice).toBe(true);
+    expect(deriveWardState("addr", sim.getLedger(), hospital, "undeployed").bills[0].claimCodeOnDevice).toBe(false);
   });
 
-  it("follows a bill from issue to funded", () => {
+  it("follows a bill from issue to funded", async () => {
     const patient = withClaimCode(createWardPrivateState(randomBytes(32)), billId, code);
-    sim.openFundraiser(patient, billId, "Help Ada get her heart surgery");
-    sim.donate(createWardPrivateState(randomBytes(32)), billId, 2_400_000_000n);
+    await sim.openFundraiser(patient, billId, "Help Ada get her heart surgery");
+    await sim.donate(createWardPrivateState(randomBytes(32)), billId, 2_400_000_000n);
 
-    const bill = deriveWardState("addr", sim.getLedger(), patient).bills[0];
+    const bill = deriveWardState("addr", sim.getLedger(), patient, "undeployed").bills[0];
     expect(bill.title).toBe("Help Ada get her heart surgery");
     expect(bill.status).toBe(BillStatus.FUNDED);
     expect(bill.raised).toBe(bill.amountDue);

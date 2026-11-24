@@ -16,11 +16,11 @@
 import * as Ward from "../../contract/src/managed/ward/contract/index.js";
 import { CompiledWardContract } from "../../contract/src/index";
 import { type WardPrivateState, createWardPrivateState, withClaimCode } from "../../contract/src/witnesses.js";
-import { type ContractAddress } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
+import { type ContractAddress, ContractState } from "@midnight-ntwrk/compact-runtime";
 import { deployContract, findDeployedContract } from "@midnight-ntwrk/midnight-js-contracts";
-import { getNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { BehaviorSubject, combineLatest, map, type Observable } from "rxjs";
 import { type Logger } from "pino";
+import type { NetworkId } from "@midnight-ntwrk/midnight-js-types";
 import {
   type BillView,
   type DeployedWardContract,
@@ -47,8 +47,8 @@ export const deriveWardState = (
   contractAddress: string,
   ledger: Ward.Ledger,
   privateState: WardPrivateState,
+  networkId: NetworkId,
 ): WardState => {
-  const networkId = getNetworkId();
   const myHospitalKey = Ward.pureCircuits.hospitalKey(privateState.secretKey);
 
   const hospitals: HospitalView[] = Array.from(ledger.hospitals, ([key, hospital]) => ({
@@ -106,19 +106,30 @@ export class WardAPI {
     private readonly logger?: Logger,
   ) {
     this.deployedContractAddress = deployedContract.deployTxData.public.contractAddress;
-    providers.privateStateProvider.setContractAddress(this.deployedContractAddress);
     this.#privateState$ = new BehaviorSubject(initialPrivateState);
     this.state$ = combineLatest([
       providers.publicDataProvider
         .contractStateObservable(this.deployedContractAddress, { type: "latest" })
-        .pipe(map((contractState) => Ward.ledger(contractState.data))),
+        .pipe(map((record) => Ward.ledger(record.value.contractState.deserialize({ v9: ContractState }).data))),
       this.#privateState$,
-    ]).pipe(map(([ledger, privateState]) => deriveWardState(this.deployedContractAddress, ledger, privateState)));
+    ]).pipe(
+      map(([ledger, privateState]) =>
+        deriveWardState(this.deployedContractAddress, ledger, privateState, this.#networkId),
+      ),
+    );
+  }
+
+  get #networkId(): NetworkId {
+    return this.providers.config.networkId;
+  }
+
+  #privateStates() {
+    return this.providers.privateStateProvider.forContract(this.deployedContractAddress);
   }
 
   /** Re-reads private state after a transaction, since witnesses may update it. */
   async #refreshPrivateState(): Promise<void> {
-    const latest = await this.providers.privateStateProvider.get(wardPrivateStateKey);
+    const latest = await this.#privateStates().get(wardPrivateStateKey);
     if (latest) this.#privateState$.next(latest);
   }
 
@@ -127,7 +138,7 @@ export class WardAPI {
   }
 
   async registerHospital(hospitalKey: string, name: string, payoutAddress: string): Promise<string> {
-    const payout = parseUnshieldedAddress(payoutAddress, getNetworkId());
+    const payout = parseUnshieldedAddress(payoutAddress, this.#networkId);
     const tx = await this.deployedContract.callTx.registerHospital(fromHex(hospitalKey), name.trim(), {
       bytes: payout,
     });
@@ -156,9 +167,9 @@ export class WardAPI {
    */
   async openFundraiser(claim: string, title: string): Promise<string> {
     const { billId, code } = decodeClaim(claim);
-    const current = (await this.providers.privateStateProvider.get(wardPrivateStateKey)) ?? this.#privateState$.value;
+    const current = (await this.#privateStates().get(wardPrivateStateKey)) ?? this.#privateState$.value;
     const updated = withClaimCode(current, billId, code);
-    await this.providers.privateStateProvider.set(wardPrivateStateKey, updated);
+    await this.#privateStates().set(wardPrivateStateKey, updated);
     this.#privateState$.next(updated);
 
     const tx = await this.deployedContract.callTx.openFundraiser(billId, title.trim());
@@ -217,8 +228,7 @@ export class WardAPI {
     logger?: Logger,
     options: { secretKey?: Uint8Array } = {},
   ): Promise<WardAPI> {
-    providers.privateStateProvider.setContractAddress(contractAddress);
-    const existing = await providers.privateStateProvider.get(wardPrivateStateKey);
+    const existing = await providers.privateStateProvider.forContract(contractAddress).get(wardPrivateStateKey);
     const initialPrivateState = existing ?? createWardPrivateState(options.secretKey ?? randomBytes(32));
     logger?.info({ joinContract: { contractAddress } });
     const found = await findDeployedContract<WardContract>(providers, {
@@ -237,13 +247,13 @@ export class WardAPI {
   async currentState(): Promise<WardState> {
     const ledger = await WardAPI.readLedger(this.providers, this.deployedContractAddress);
     if (!ledger) throw new Error(`No Ward contract found at ${this.deployedContractAddress}`);
-    return deriveWardState(this.deployedContractAddress, ledger, this.#privateState$.value);
+    return deriveWardState(this.deployedContractAddress, ledger, this.#privateState$.value, this.#networkId);
   }
 
   /** Reads the current public state once, without joining. */
   static async readLedger(providers: WardProviders, contractAddress: ContractAddress): Promise<Ward.Ledger | null> {
-    const state = await providers.publicDataProvider.queryContractState(contractAddress);
-    return state ? Ward.ledger(state.data) : null;
+    const read = await providers.publicDataProvider.queryContractState(contractAddress);
+    return read ? Ward.ledger(read.contractState.deserialize({ v9: ContractState }).data) : null;
   }
 }
 
