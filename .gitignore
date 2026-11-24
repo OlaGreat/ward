@@ -66,6 +66,7 @@ managed/
 # Proving keys and ZKIR copied from the compiled contract
 ward-ui/public/keys/
 ward-ui/public/zkir/
+ward-ui/public/compiler/
 .vite/
 
 # Local-only environment overrides (may hold API keys)

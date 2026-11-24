@@ -7,7 +7,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "keys": "rm -rf public/keys public/zkir && cp -r ../contract/src/managed/ward/keys public/keys && cp -r ../contract/src/managed/ward/zkir public/zkir",
+    "keys": "rm -rf public/keys public/zkir public/compiler && cp -r ../contract/src/managed/ward/keys public/keys && cp -r ../contract/src/managed/ward/zkir public/zkir && cp -r ../contract/src/managed/ward/compiler public/compiler",
     "dev": "npm run keys && vite --mode preprod",
     "build": "npm run keys && tsc -p tsconfig.json --noEmit && vite build --mode preprod",
     "preview": "vite preview --mode preprod",

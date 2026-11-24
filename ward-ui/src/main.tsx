@@ -8,12 +8,9 @@ import "@midnight-ntwrk/dapp-connector-api";
 
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import App from "./App";
 import { WalletProvider } from "./hooks/wallet";
 import { WardProvider } from "./hooks/ward";
-
-setNetworkId(import.meta.env.VITE_NETWORK_ID);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

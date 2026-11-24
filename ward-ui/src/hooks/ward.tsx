@@ -16,6 +16,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { WardAPI, deriveWardState, type WardProviders, type WardState } from "../../../api/src/index";
 import { ledger } from "../../../contract/src/managed/ward/contract/index.js";
+import { ContractState } from "@midnight-ntwrk/compact-runtime";
 import { createWardPrivateState } from "../../../contract/src/witnesses";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { NIGHT_TOKEN } from "../../../api/src/utils/index";
@@ -105,9 +106,10 @@ export function WardProvider({ children }: { children: ReactNode }) {
       const refresh = () =>
         publicData
           .queryContractState(contractAddress)
-          .then((contractState) => {
-            if (!contractState) return;
-            setState(deriveWardState(contractAddress, ledger(contractState.data), viewer));
+          .then((read) => {
+            if (!read) return;
+            const onChain = ledger(read.contractState.deserialize({ v9: ContractState }).data);
+            setState(deriveWardState(contractAddress, onChain, viewer, import.meta.env.VITE_NETWORK_ID));
             setStatus("ready");
           })
           .catch(() => undefined);

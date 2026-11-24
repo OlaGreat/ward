@@ -14,12 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ConnectedAPI, KeyMaterialProvider } from "@midnight-ntwrk/dapp-connector-api";
+import type { ConnectedAPI } from "@midnight-ntwrk/dapp-connector-api";
+import {
+  dappConnectorProofProvider,
+  dappConnectorWalletProviders,
+} from "@midnight-ntwrk/midnight-js-dapp-connector-proof-provider";
 import { FetchZkConfigProvider } from "@midnight-ntwrk/midnight-js-fetch-zk-config-provider";
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
-import { fromHex, toHex } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
-import { CostModel, Transaction } from "@midnight-ntwrk/midnight-js-protocol/ledger";
+import { CostModel } from "@midnight-ntwrk/midnight-js-protocol/v9";
 import type { ProofProvider } from "@midnight-ntwrk/midnight-js-types";
 import { BehaviorSubject } from "rxjs";
 import type { PrivateStateId, WardCircuitKeys, WardProviders } from "../../../api/src/index";
@@ -35,24 +38,6 @@ export type ProvingMode = "wallet" | "proof-server";
 /** How proofs are currently being made; can switch to the proof server mid-session. */
 export const provingMode$ = new BehaviorSubject<ProvingMode | null>(null);
 
-// Ward's own circuits. The network's built-in circuits are proven with the
-// prover's own keys, so their key material is reported missing, exactly as
-// Midnight's HTTP proof provider does.
-const WARD_CIRCUITS = new Set<string>([
-  "registerHospital",
-  "setHospitalActive",
-  "issueBill",
-  "openFundraiser",
-  "donate",
-  "cancelBill",
-  "confirmTreatment",
-] satisfies WardCircuitKeys[]);
-
-const wardCircuit = (location: string): WardCircuitKeys => {
-  if (!WARD_CIRCUITS.has(location)) throw new Error(`No Ward key material for ${location}`);
-  return location as WardCircuitKeys;
-};
-
 /**
  * Proves through the wallet when it offers a proving provider, so users need
  * no proof server of their own. If that is unavailable or fails, a proof
@@ -64,19 +49,18 @@ const createProofProvider = async (
   proverServerUri: string | undefined,
 ): Promise<ProofProvider> => {
   const proofServer = httpClientProofProvider(proverServerUri ?? "http://localhost:6300", zkConfig);
-  const keyMaterial: KeyMaterialProvider = {
-    getZKIR: (location) => zkConfig.getZKIR(wardCircuit(location)),
-    getProverKey: (location) => zkConfig.getProverKey(wardCircuit(location)),
-    getVerifierKey: (location) => zkConfig.getVerifierKey(wardCircuit(location)),
-  };
-  const walletProving = await api.getProvingProvider(keyMaterial).catch(() => undefined);
-  provingMode$.next(walletProving ? "wallet" : "proof-server");
+  const walletProof = await dappConnectorProofProvider(api, zkConfig, CostModel.initialCostModel()).catch(
+    () => undefined,
+  );
+  provingMode$.next(walletProof ? "wallet" : "proof-server");
 
   return {
+    supportedEras: proofServer.supportedEras,
     proveTx: async (tx, options) => {
-      if (walletProving && provingMode$.value === "wallet") {
+      if (walletProof && provingMode$.value === "wallet") {
         try {
-          return await tx.prove(walletProving, CostModel.initialCostModel());
+          // The wallet's proving API takes no timeout, so options are not forwarded.
+          return await walletProof.proveTx(tx);
         } catch (error) {
           console.warn("Proving through the wallet failed; switching to the proof server", error);
           provingMode$.next("proof-server");
@@ -89,9 +73,11 @@ const createProofProvider = async (
 
 export const createWardProviders = async (api: ConnectedAPI): Promise<WardProviders> => {
   const config = await api.getConfiguration();
-  const zkConfig = new FetchZkConfigProvider<WardCircuitKeys>(window.location.origin, fetch.bind(window));
+  const zkConfig = new FetchZkConfigProvider<WardCircuitKeys>(window.location.origin, {
+    fetchFunc: fetch.bind(window),
+  });
   const proofProvider = await createProofProvider(api, zkConfig, config.proverServerUri);
-  const addresses = await api.getShieldedAddresses();
+  const { walletProvider, midnightProvider } = await dappConnectorWalletProviders(api);
 
   const providers: WardProviders = {
     privateStateProvider: browserPrivateStateProvider<PrivateStateId, WardPrivateState>(),
@@ -103,28 +89,31 @@ export const createWardProviders = async (api: ConnectedAPI): Promise<WardProvid
       WebSocket as unknown as Parameters<typeof indexerPublicDataProvider>[2],
     ),
     proofProvider: {
+      supportedEras: proofProvider.supportedEras,
       proveTx: async (tx, options) => {
         txStage$.next("proving");
         return proofProvider.proveTx(tx, options);
       },
     },
     walletProvider: {
-      getCoinPublicKey: () => addresses.shieldedCoinPublicKey,
-      getEncryptionPublicKey: () => addresses.shieldedEncryptionPublicKey,
-      balanceTx: async (tx) => {
+      supportedEras: walletProvider.supportedEras,
+      getCoinPublicKey: () => walletProvider.getCoinPublicKey(),
+      getEncryptionPublicKey: () => walletProvider.getEncryptionPublicKey(),
+      balanceTx: async (tx, ttl) => {
         txStage$.next("approving");
-        const balanced = await api.balanceUnsealedTransaction(toHex(tx.serialize()));
-        return Transaction.deserialize("signature", "proof", "binding", fromHex(balanced.tx));
+        return walletProvider.balanceTx(tx, ttl);
       },
     },
     midnightProvider: {
+      supportedEras: midnightProvider.supportedEras,
       submitTx: async (tx) => {
         txStage$.next("submitting");
-        await api.submitTransaction(toHex(tx.serialize()));
+        const id = await midnightProvider.submitTx(tx);
         txStage$.next("confirming");
-        return tx.identifiers()[0];
+        return id;
       },
     },
+    config: { networkId: config.networkId, ttlSeconds: 3600 },
   };
   return providers;
 };

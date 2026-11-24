@@ -14,8 +14,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ContractAddress, SigningKey } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
+import type { ContractAddress, SigningKey } from "@midnight-ntwrk/midnight-js-protocol/v9/compact-runtime";
 import type {
+  ContractPrivateStates,
   ExportPrivateStatesOptions,
   ExportSigningKeysOptions,
   ImportPrivateStatesOptions,
@@ -35,8 +36,9 @@ import type {
  */
 
 const PREFIX = "ward:v1";
-const stateKey = (address: ContractAddress, id: string) => `${PREFIX}:state:${address}:${id}`;
-const signingKeyKey = (address: ContractAddress) => `${PREFIX}:signing:${address}`;
+// Midnight.js compares contract addresses in lower case, so keys are stored that way.
+const stateKey = (address: ContractAddress, id: string) => `${PREFIX}:state:${address.toLowerCase()}:${id}`;
+const signingKeyKey = (address: ContractAddress) => `${PREFIX}:signing:${address.toLowerCase()}`;
 
 // JSON with byte arrays written as hex, so Uint8Array fields round-trip.
 const encode = (value: unknown): string =>
@@ -54,7 +56,7 @@ const decode = <T>(text: string): T =>
   }) as T;
 
 const statesFor = (address: ContractAddress): Array<[string, string]> => {
-  const prefix = `${PREFIX}:state:${address}:`;
+  const prefix = `${PREFIX}:state:${address.toLowerCase()}:`;
   const entries: Array<[string, string]> = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -69,12 +71,6 @@ export const browserPrivateStateProvider = <PSI extends PrivateStateId, PS = unk
   PSI,
   PS
 > => {
-  let contractAddress: ContractAddress | null = null;
-  const current = (): ContractAddress => {
-    if (contractAddress === null) throw new Error("Contract address not set before accessing private state");
-    return contractAddress;
-  };
-
   const importEntries = (
     entries: Array<[string, string]>,
     keyFor: (id: string) => string,
@@ -98,25 +94,58 @@ export const browserPrivateStateProvider = <PSI extends PrivateStateId, PS = unk
     return counts;
   };
 
-  return {
-    setContractAddress(address: ContractAddress): void {
-      contractAddress = address;
-    },
+  const forContract = (address: ContractAddress): ContractPrivateStates<PSI, PS> => ({
+    contractAddress: address.toLowerCase(),
     set(id: PSI, state: PS): Promise<void> {
-      localStorage.setItem(stateKey(current(), id), encode(state));
+      localStorage.setItem(stateKey(address, id), encode(state));
       return Promise.resolve();
     },
     get(id: PSI): Promise<PS | null> {
-      const stored = localStorage.getItem(stateKey(current(), id));
+      const stored = localStorage.getItem(stateKey(address, id));
       return Promise.resolve(stored === null ? null : decode<PS>(stored));
     },
     remove(id: PSI): Promise<void> {
-      localStorage.removeItem(stateKey(current(), id));
+      localStorage.removeItem(stateKey(address, id));
       return Promise.resolve();
     },
     clear(): Promise<void> {
-      const address = current();
       for (const [id] of statesFor(address)) localStorage.removeItem(stateKey(address, id));
+      return Promise.resolve();
+    },
+    exportPrivateStates(options?: ExportPrivateStatesOptions): Promise<PrivateStateExport> {
+      void options;
+      return Promise.resolve({
+        format: "midnight-private-state-export",
+        encryptedPayload: JSON.stringify({ contractAddress: address, states: Object.fromEntries(statesFor(address)) }),
+        salt: "ward-browser-storage",
+      });
+    },
+    importPrivateStates(
+      exportData: PrivateStateExport,
+      options?: ImportPrivateStatesOptions,
+    ): Promise<ImportPrivateStatesResult> {
+      try {
+        const payload = JSON.parse(exportData.encryptedPayload) as { states?: Record<string, string> };
+        return Promise.resolve(
+          importEntries(
+            Object.entries(payload.states ?? {}),
+            (id) => stateKey(address, id),
+            options?.conflictStrategy ?? "error",
+          ),
+        );
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+  });
+
+  return {
+    forContract,
+    clearAll(): Promise<void> {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(`${PREFIX}:state:`)) localStorage.removeItem(key);
+      }
       return Promise.resolve();
     },
     setSigningKey(address: ContractAddress, signingKey: SigningKey): Promise<void> {
@@ -137,33 +166,6 @@ export const browserPrivateStateProvider = <PSI extends PrivateStateId, PS = unk
         if (key?.startsWith(`${PREFIX}:signing:`)) localStorage.removeItem(key);
       }
       return Promise.resolve();
-    },
-    exportPrivateStates(options?: ExportPrivateStatesOptions): Promise<PrivateStateExport> {
-      void options;
-      const address = current();
-      return Promise.resolve({
-        format: "midnight-private-state-export",
-        encryptedPayload: JSON.stringify({ contractAddress: address, states: Object.fromEntries(statesFor(address)) }),
-        salt: "ward-browser-storage",
-      });
-    },
-    importPrivateStates(
-      exportData: PrivateStateExport,
-      options?: ImportPrivateStatesOptions,
-    ): Promise<ImportPrivateStatesResult> {
-      try {
-        const address = current();
-        const payload = JSON.parse(exportData.encryptedPayload) as { states?: Record<string, string> };
-        return Promise.resolve(
-          importEntries(
-            Object.entries(payload.states ?? {}),
-            (id) => stateKey(address, id),
-            options?.conflictStrategy ?? "error",
-          ),
-        );
-      } catch (error) {
-        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-      }
     },
     exportSigningKeys(options?: ExportSigningKeysOptions): Promise<SigningKeyExport> {
       void options;
