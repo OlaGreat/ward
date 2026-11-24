@@ -15,7 +15,6 @@
 
 import path from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { validatePassword } from "@midnight-ntwrk/midnight-js-utils";
 import type { EnvironmentConfiguration } from "@midnight-ntwrk/testkit-js";
 import { randomBytes, toHex } from "../../api/src/utils/index.js";
@@ -26,15 +25,17 @@ export const cliDir = path.resolve(new URL(import.meta.url).pathname, "..", ".."
 export const envFile = path.join(cliDir, ".env");
 export const zkConfigPath = path.resolve(cliDir, "..", "contract", "src", "managed", "ward");
 export const deploymentFile = (network: NetworkName) => path.join(cliDir, "deployments", `${network}.json`);
-/** Saved wallet sync progress; holds key material, so it is git-ignored and owner-only. */
-export const walletStateFile = (network: NetworkName) => path.join(cliDir, ".wallet-state", `${network}.json`);
+/**
+ * Saved wallet sync progress; holds key material, so it is git-ignored and owner-only.
+ * Ledger 9 wallets (wallet SDK 2) use a new file: the ledger 8 state can't be resumed.
+ */
+export const walletStateFile = (network: NetworkName) => path.join(cliDir, ".wallet-state", `${network}.ledger9.json`);
 
 export const networkName = (): NetworkName => {
   const value = (process.env.WARD_NETWORK ?? "preprod").trim();
   if (value !== "preprod" && value !== "preview" && value !== "undeployed") {
     throw new Error(`WARD_NETWORK must be preprod, preview or undeployed (got "${value}")`);
   }
-  setNetworkId(value);
   return value;
 };
 

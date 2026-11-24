@@ -24,6 +24,7 @@ import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-p
 import { httpClientProofProvider } from "@midnight-ntwrk/midnight-js-http-client-proof-provider";
 import { levelPrivateStateProvider } from "@midnight-ntwrk/midnight-js-level-private-state-provider";
 import { logger as testkitLogger } from "@midnight-ntwrk/testkit-js";
+import { ContractState } from "@midnight-ntwrk/compact-runtime";
 import {
   BillStatus,
   WardAPI,
@@ -178,8 +179,9 @@ const openSession = async (network: NetworkName): Promise<Session> => {
     publicDataProvider: indexerPublicDataProvider(env.indexer, env.indexerWS),
     zkConfigProvider,
     proofProvider: httpClientProofProvider(env.proofServer, zkConfigProvider),
-    walletProvider: wallet,
-    midnightProvider: wallet,
+    walletProvider: wallet.provider,
+    midnightProvider: wallet.provider,
+    config: { networkId: network, ttlSeconds: 3600 },
   };
   return { network, wallet, providers };
 };
@@ -197,7 +199,9 @@ const CIRCUIT_METHODS = new Set([
 /** A request that failed before any response arrived (the SDK reports these as "unknown error"),
  * or a fee proof built on DUST state that went stale (node error 170); both succeed on retry. */
 const isDroppedConnection = (error: unknown): boolean =>
-  /unknown error occurred|ECONNRESET|socket hang up|fetch failed|ETIMEDOUT|Custom error: 170/i.test(describeError(error));
+  /unknown error occurred|ECONNRESET|socket hang up|fetch failed|ETIMEDOUT|Custom error: 170/i.test(
+    describeError(error),
+  );
 
 const withRetry = async <T>(label: string, action: () => Promise<T>, attempts = 3): Promise<T> => {
   for (let attempt = 1; ; attempt++) {
@@ -301,7 +305,14 @@ const main = async (): Promise<void> => {
       contractAddress,
     );
     if (!contractState) throw new Error(`No Ward contract found at ${contractAddress}`);
-    printStatus(deriveWardState(contractAddress, ledger(contractState.data), createWardPrivateState(operatorSecret())));
+    printStatus(
+      deriveWardState(
+        contractAddress,
+        ledger(contractState.contractState.deserialize({ v9: ContractState }).data),
+        createWardPrivateState(operatorSecret()),
+        network,
+      ),
+    );
     return;
   }
 
