@@ -19,7 +19,7 @@
  */
 
 import { Ledger } from "./managed/ward/contract/index.js";
-import { WitnessContext } from "@midnight-ntwrk/midnight-js-protocol/compact-runtime";
+import { WitnessContext } from "@midnight-ntwrk/midnight-js-protocol/v9/compact-runtime";
 
 export type WardPrivateState = {
   /** Role secret for the Ward operator or a hospital. */

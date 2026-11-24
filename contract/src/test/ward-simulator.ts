@@ -14,90 +14,99 @@
 // limitations under the License.
 
 import {
+  type ChargedState,
   type CircuitContext,
   type CircuitResults,
   type Effects,
-  QueryContext,
-  sampleContractAddress,
+  createCircuitContext,
   createConstructorContext,
-  CostModel,
+  sampleContractAddress,
 } from "@midnight-ntwrk/compact-runtime";
 import { Contract, type Ledger, ledger } from "../managed/ward/contract/index.js";
 import { type WardPrivateState, createWardPrivateState, witnesses } from "../witnesses.js";
 
+const DEPLOYER_COIN_KEY = "0".repeat(64);
+
 /**
  * Runs the Ward contract locally, without a network or proof server.
- * Each call starts from a fresh query context, like a separate transaction,
- * so `lastEffects` and `lastTranscript` describe only the most recent call.
+ * Each call is its own transaction built from the current public state, so
+ * `lastEffects` and `lastTranscript` describe only the most recent call.
  */
 export class WardSimulator {
   readonly contract: Contract<WardPrivateState>;
-  circuitContext: CircuitContext<WardPrivateState>;
+  readonly address = sampleContractAddress();
   lastEffects: Effects | undefined;
   lastTranscript: unknown;
+  private state: ChargedState;
 
-  constructor(operatorSecret: Uint8Array, donationToken: Uint8Array) {
-    this.contract = new Contract<WardPrivateState>(witnesses);
-    const { currentPrivateState, currentContractState, currentZswapLocalState } = this.contract.initialState(
-      createConstructorContext(createWardPrivateState(operatorSecret), "0".repeat(64)),
+  private constructor(contract: Contract<WardPrivateState>, state: ChargedState) {
+    this.contract = contract;
+    this.state = state;
+  }
+
+  static async create(operatorSecret: Uint8Array, donationToken: Uint8Array): Promise<WardSimulator> {
+    const contract = new Contract<WardPrivateState>(witnesses);
+    const { currentContractState } = await contract.initialState(
+      createConstructorContext(createWardPrivateState(operatorSecret), DEPLOYER_COIN_KEY),
       donationToken,
     );
-    this.circuitContext = {
-      currentPrivateState,
-      currentZswapLocalState,
-      costModel: CostModel.initialCostModel(),
-      currentQueryContext: new QueryContext(currentContractState.data, sampleContractAddress()),
-    };
+    return new WardSimulator(contract, currentContractState.data);
   }
 
   getLedger(): Ledger {
-    return ledger(this.circuitContext.currentQueryContext.state);
+    return ledger(this.state);
   }
 
-  private run<R>(
+  private async run<R>(
+    circuitId: string,
     caller: WardPrivateState,
-    call: (ctx: CircuitContext<WardPrivateState>) => CircuitResults<WardPrivateState, R>,
-  ): R {
-    const previous = this.circuitContext.currentQueryContext;
-    const fresh: CircuitContext<WardPrivateState> = {
-      ...this.circuitContext,
-      currentPrivateState: caller,
-      currentQueryContext: new QueryContext(previous.state, previous.address),
-    };
-    const results = call(fresh);
-    this.circuitContext = results.context;
-    this.lastEffects = results.context.currentQueryContext.effects;
-    this.lastTranscript = results.proofData.publicTranscript;
+    call: (ctx: CircuitContext<WardPrivateState>) => Promise<CircuitResults<WardPrivateState, R>>,
+  ): Promise<R> {
+    const context = createCircuitContext<WardPrivateState>({
+      circuitId,
+      contractAddress: this.address,
+      coinPublicKeyOrZswapState: DEPLOYER_COIN_KEY,
+      contractState: this.state,
+      privateState: caller,
+    });
+    const results = await call(context);
+    const query = results.context.callContext.currentQueryContext;
+    this.state = query.state;
+    this.lastEffects = query.effects;
+    // The root circuit's proof data is the last entry of the trace.
+    this.lastTranscript = results.context.callProofDataTrace.at(-1)?.publicTranscript;
     return results.result;
   }
 
   registerHospital(caller: WardPrivateState, hospitalPk: Uint8Array, name: string, payout: Uint8Array) {
-    return this.run(caller, (ctx) =>
+    return this.run("registerHospital", caller, (ctx) =>
       this.contract.impureCircuits.registerHospital(ctx, hospitalPk, name, { bytes: payout }),
     );
   }
 
   setHospitalActive(caller: WardPrivateState, hospitalPk: Uint8Array, active: boolean) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.setHospitalActive(ctx, hospitalPk, active));
+    return this.run("setHospitalActive", caller, (ctx) =>
+      this.contract.impureCircuits.setHospitalActive(ctx, hospitalPk, active),
+    );
   }
 
   issueBill(caller: WardPrivateState, billId: Uint8Array, amountDue: bigint, code: Uint8Array) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.issueBill(ctx, billId, amountDue, code));
+    return this.run("issueBill", caller, (ctx) => this.contract.impureCircuits.issueBill(ctx, billId, amountDue, code));
   }
 
   openFundraiser(caller: WardPrivateState, billId: Uint8Array, title: string) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.openFundraiser(ctx, billId, title));
+    return this.run("openFundraiser", caller, (ctx) => this.contract.impureCircuits.openFundraiser(ctx, billId, title));
   }
 
   donate(caller: WardPrivateState, billId: Uint8Array, amount: bigint) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.donate(ctx, billId, amount));
+    return this.run("donate", caller, (ctx) => this.contract.impureCircuits.donate(ctx, billId, amount));
   }
 
   cancelBill(caller: WardPrivateState, billId: Uint8Array) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.cancelBill(ctx, billId));
+    return this.run("cancelBill", caller, (ctx) => this.contract.impureCircuits.cancelBill(ctx, billId));
   }
 
   confirmTreatment(caller: WardPrivateState, billId: Uint8Array) {
-    return this.run(caller, (ctx) => this.contract.impureCircuits.confirmTreatment(ctx, billId));
+    return this.run("confirmTreatment", caller, (ctx) => this.contract.impureCircuits.confirmTreatment(ctx, billId));
   }
 }

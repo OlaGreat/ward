@@ -14,7 +14,6 @@
 // limitations under the License.
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import {
   encodeRawTokenType,
   encodeUserAddress,
@@ -25,8 +24,6 @@ import { BillStatus, pureCircuits } from "../managed/ward/contract/index.js";
 import { type WardPrivateState, createWardPrivateState, toHex, withClaimCode } from "../witnesses.js";
 import { WardSimulator } from "./ward-simulator.js";
 import { randomBytes } from "./utils.js";
-
-setNetworkId("undeployed");
 
 const TOKEN_HEX = sampleRawTokenType();
 const TOKEN = encodeRawTokenType(TOKEN_HEX);
@@ -50,28 +47,28 @@ describe("Ward contract", () => {
   let stranger: WardPrivateState;
 
   // A bill issued by `hospital` with a fundraiser opened by `patient`.
-  const openBill = (amount = 1_000n, title = "Help Ada get her heart surgery") => {
+  const openBill = async (amount = 1_000n, title = "Help Ada get her heart surgery") => {
     const billId = randomBytes(32);
     const code = randomBytes(32);
-    sim.issueBill(hospital, billId, amount, code);
+    await sim.issueBill(hospital, billId, amount, code);
     const patient = withClaimCode(createWardPrivateState(randomBytes(32)), billId, code);
-    sim.openFundraiser(patient, billId, title);
+    await sim.openFundraiser(patient, billId, title);
     return { billId, code, patient };
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     operator = createWardPrivateState(randomBytes(32));
     hospital = createWardPrivateState(randomBytes(32));
     stranger = createWardPrivateState(randomBytes(32));
     hospitalPk = pureCircuits.hospitalKey(hospital.secretKey);
     payoutHex = sampleUserAddress();
-    sim = new WardSimulator(operator.secretKey, TOKEN);
-    sim.registerHospital(operator, hospitalPk, "St. Mercy Medical Centre", encodeUserAddress(payoutHex));
+    sim = await WardSimulator.create(operator.secretKey, TOKEN);
+    await sim.registerHospital(operator, hospitalPk, "St. Mercy Medical Centre", encodeUserAddress(payoutHex));
   });
 
   describe("deployment", () => {
-    it("stores only a hash of the operator's secret and the donation token", () => {
-      const fresh = new WardSimulator(operator.secretKey, TOKEN).getLedger();
+    it("stores only a hash of the operator's secret and the donation token", async () => {
+      const fresh = (await WardSimulator.create(operator.secretKey, TOKEN)).getLedger();
       expect(fresh.operator).toEqual(pureCircuits.operatorKey(operator.secretKey));
       expect(fresh.operator).not.toEqual(operator.secretKey);
       expect(fresh.donationToken).toEqual(TOKEN);
@@ -80,46 +77,44 @@ describe("Ward contract", () => {
       expect(fresh.hospitals.isEmpty()).toBe(true);
     });
 
-    it("derives unrelated operator and hospital keys from the same secret", () => {
+    it("derives unrelated operator and hospital keys from the same secret", async () => {
       const secret = randomBytes(32);
       expect(pureCircuits.operatorKey(secret)).not.toEqual(pureCircuits.hospitalKey(secret));
     });
   });
 
   describe("hospital registry", () => {
-    it("lets the operator register a hospital", () => {
+    it("lets the operator register a hospital", async () => {
       const record = sim.getLedger().hospitals.lookup(hospitalPk);
       expect(record.name).toEqual("St. Mercy Medical Centre");
       expect(record.payout.bytes).toEqual(encodeUserAddress(payoutHex));
       expect(record.active).toBe(true);
     });
 
-    it("rejects registrations from anyone but the operator", () => {
-      expect(() =>
-        sim.registerHospital(stranger, randomBytes(32), "Fake Clinic", encodeUserAddress(sampleUserAddress())),
-      ).toThrow("failed assert: Only the Ward operator can do this");
+    it("rejects registrations from anyone but the operator", async () => {
+      await expect(sim.registerHospital(stranger, randomBytes(32), "Fake Clinic", encodeUserAddress(sampleUserAddress()))).rejects.toThrow("failed assert: Only the Ward operator can do this");
     });
 
-    it("rejects registering the same hospital twice", () => {
-      expect(() => sim.registerHospital(operator, hospitalPk, "St. Mercy again", encodeUserAddress(payoutHex))).toThrow(
+    it("rejects registering the same hospital twice", async () => {
+      await expect(sim.registerHospital(operator, hospitalPk, "St. Mercy again", encodeUserAddress(payoutHex))).rejects.toThrow(
         "failed assert: Hospital already registered",
       );
     });
 
-    it("lets only the operator suspend a hospital", () => {
-      expect(() => sim.setHospitalActive(stranger, hospitalPk, false)).toThrow(
+    it("lets only the operator suspend a hospital", async () => {
+      await expect(sim.setHospitalActive(stranger, hospitalPk, false)).rejects.toThrow(
         "failed assert: Only the Ward operator can do this",
       );
-      sim.setHospitalActive(operator, hospitalPk, false);
+      await sim.setHospitalActive(operator, hospitalPk, false);
       expect(sim.getLedger().hospitals.lookup(hospitalPk).active).toBe(false);
     });
   });
 
   describe("issuing bills", () => {
-    it("records the bill with a commitment to the claim code, never the code itself", () => {
+    it("records the bill with a commitment to the claim code, never the code itself", async () => {
       const billId = randomBytes(32);
       const code = randomBytes(32);
-      sim.issueBill(hospital, billId, 2_400n, code);
+      await sim.issueBill(hospital, billId, 2_400n, code);
 
       const bill = sim.getLedger().bills.lookup(billId);
       expect(bill.hospital).toEqual(hospitalPk);
@@ -141,91 +136,91 @@ describe("Ward contract", () => {
       expect(dump(Array.from(sim.getLedger().bills))).not.toContain(toHex(code));
     });
 
-    it("rejects bills from callers that are not registered hospitals", () => {
-      expect(() => sim.issueBill(stranger, randomBytes(32), 100n, randomBytes(32))).toThrow(
+    it("rejects bills from callers that are not registered hospitals", async () => {
+      await expect(sim.issueBill(stranger, randomBytes(32), 100n, randomBytes(32))).rejects.toThrow(
         "failed assert: Caller is not a registered hospital",
       );
     });
 
-    it("rejects bills from a suspended hospital", () => {
-      sim.setHospitalActive(operator, hospitalPk, false);
-      expect(() => sim.issueBill(hospital, randomBytes(32), 100n, randomBytes(32))).toThrow(
+    it("rejects bills from a suspended hospital", async () => {
+      await sim.setHospitalActive(operator, hospitalPk, false);
+      await expect(sim.issueBill(hospital, randomBytes(32), 100n, randomBytes(32))).rejects.toThrow(
         "failed assert: Hospital is suspended",
       );
     });
 
-    it("rejects a zero amount and a reused bill ID", () => {
+    it("rejects a zero amount and a reused bill ID", async () => {
       const billId = randomBytes(32);
-      expect(() => sim.issueBill(hospital, billId, 0n, randomBytes(32))).toThrow(
+      await expect(sim.issueBill(hospital, billId, 0n, randomBytes(32))).rejects.toThrow(
         "failed assert: Bill amount must be greater than zero",
       );
-      sim.issueBill(hospital, billId, 100n, randomBytes(32));
-      expect(() => sim.issueBill(hospital, billId, 100n, randomBytes(32))).toThrow(
+      await sim.issueBill(hospital, billId, 100n, randomBytes(32));
+      await expect(sim.issueBill(hospital, billId, 100n, randomBytes(32))).rejects.toThrow(
         "failed assert: Bill ID already used",
       );
     });
   });
 
   describe("opening a fundraiser", () => {
-    it("lets the patient open it with the claim code", () => {
-      const { billId } = openBill(1_000n, "Help Ada get her heart surgery");
+    it("lets the patient open it with the claim code", async () => {
+      const { billId } = await openBill(1_000n, "Help Ada get her heart surgery");
       const bill = sim.getLedger().bills.lookup(billId);
       expect(bill.status).toEqual(BillStatus.FUNDRAISING);
       expect(bill.title).toEqual({ is_some: true, value: "Help Ada get her heart surgery" });
     });
 
-    it("never publishes the claim code or the patient's key", () => {
+    it("never publishes the claim code or the patient's key", async () => {
       const billId = randomBytes(32);
       const code = randomBytes(32);
-      sim.issueBill(hospital, billId, 500n, code);
+      await sim.issueBill(hospital, billId, 500n, code);
       const patient = withClaimCode(createWardPrivateState(randomBytes(32)), billId, code);
-      sim.openFundraiser(patient, billId, "Dialysis for Musa");
+      await sim.openFundraiser(patient, billId, "Dialysis for Musa");
       const transcript = dump(sim.lastTranscript);
       expect(transcript).toContain(toHex(billId));
       expect(transcript).not.toContain(toHex(code));
       expect(transcript).not.toContain(toHex(patient.secretKey));
     });
 
-    it("rejects a wrong claim code", () => {
+    it("rejects a wrong claim code", async () => {
       const billId = randomBytes(32);
-      sim.issueBill(hospital, billId, 500n, randomBytes(32));
+      await sim.issueBill(hospital, billId, 500n, randomBytes(32));
       const impostor = withClaimCode(createWardPrivateState(randomBytes(32)), billId, randomBytes(32));
-      expect(() => sim.openFundraiser(impostor, billId, "Not my bill")).toThrow("failed assert: Invalid claim code");
+      await expect(sim.openFundraiser(impostor, billId, "Not my bill")).rejects.toThrow("failed assert: Invalid claim code");
     });
 
-    it("rejects a claim code that belongs to a different bill", () => {
-      const { code } = openBill();
+    it("rejects a claim code that belongs to a different bill", async () => {
+      const { code } = await openBill();
       const otherBill = randomBytes(32);
-      sim.issueBill(hospital, otherBill, 500n, randomBytes(32));
+      await sim.issueBill(hospital, otherBill, 500n, randomBytes(32));
       const replayer = withClaimCode(createWardPrivateState(randomBytes(32)), otherBill, code);
-      expect(() => sim.openFundraiser(replayer, otherBill, "Replay")).toThrow("failed assert: Invalid claim code");
+      await expect(sim.openFundraiser(replayer, otherBill, "Replay")).rejects.toThrow("failed assert: Invalid claim code");
     });
 
-    it("allows only one fundraiser per bill", () => {
-      const { billId, patient } = openBill();
-      expect(() => sim.openFundraiser(patient, billId, "Second fundraiser")).toThrow(
+    it("allows only one fundraiser per bill", async () => {
+      const { billId, patient } = await openBill();
+      await expect(sim.openFundraiser(patient, billId, "Second fundraiser")).rejects.toThrow(
         "failed assert: A fundraiser already exists for this bill",
       );
     });
 
-    it("fails when the device has no claim code for the bill", () => {
+    it("fails when the device has no claim code for the bill", async () => {
       const billId = randomBytes(32);
-      sim.issueBill(hospital, billId, 500n, randomBytes(32));
-      expect(() => sim.openFundraiser(stranger, billId, "No code")).toThrow(
+      await sim.issueBill(hospital, billId, 500n, randomBytes(32));
+      await expect(sim.openFundraiser(stranger, billId, "No code")).rejects.toThrow(
         "No claim code saved on this device for this bill",
       );
     });
 
-    it("rejects unknown bills", () => {
-      expect(() => sim.openFundraiser(stranger, randomBytes(32), "Ghost")).toThrow("failed assert: Unknown bill");
+    it("rejects unknown bills", async () => {
+      await expect(sim.openFundraiser(stranger, randomBytes(32), "Ghost")).rejects.toThrow("failed assert: Unknown bill");
     });
   });
 
   describe("donations", () => {
-    it("forwards every donation to the hospital's payout address", () => {
-      const { billId } = openBill(1_000n);
+    it("forwards every donation to the hospital's payout address", async () => {
+      const { billId } = await openBill(1_000n);
       const donor = createWardPrivateState(randomBytes(32));
-      sim.donate(donor, billId, 250n);
+      await sim.donate(donor, billId, 250n);
 
       const effects = sim.lastEffects!;
       const received = Array.from(effects.unshieldedInputs.entries());
@@ -243,93 +238,93 @@ describe("Ward contract", () => {
       ]);
     });
 
-    it("tracks the amount raised and closes the bill once fully funded", () => {
-      const { billId } = openBill(1_000n);
+    it("tracks the amount raised and closes the bill once fully funded", async () => {
+      const { billId } = await openBill(1_000n);
       const donor = createWardPrivateState(randomBytes(32));
-      sim.donate(donor, billId, 400n);
+      await sim.donate(donor, billId, 400n);
       expect(sim.getLedger().bills.lookup(billId).raised).toEqual(400n);
       expect(sim.getLedger().bills.lookup(billId).status).toEqual(BillStatus.FUNDRAISING);
 
-      sim.donate(donor, billId, 600n);
+      await sim.donate(donor, billId, 600n);
       const bill = sim.getLedger().bills.lookup(billId);
       expect(bill.raised).toEqual(1_000n);
       expect(bill.status).toEqual(BillStatus.FUNDED);
       expect(sim.getLedger().totalRaised).toEqual(1_000n);
 
-      expect(() => sim.donate(donor, billId, 1n)).toThrow("failed assert: This bill is not accepting donations");
+      await expect(sim.donate(donor, billId, 1n)).rejects.toThrow("failed assert: This bill is not accepting donations");
     });
 
-    it("rejects donations larger than the amount still owed", () => {
-      const { billId } = openBill(1_000n);
+    it("rejects donations larger than the amount still owed", async () => {
+      const { billId } = await openBill(1_000n);
       const donor = createWardPrivateState(randomBytes(32));
-      sim.donate(donor, billId, 900n);
-      expect(() => sim.donate(donor, billId, 101n)).toThrow(
+      await sim.donate(donor, billId, 900n);
+      await expect(sim.donate(donor, billId, 101n)).rejects.toThrow(
         "failed assert: Donation is more than the amount still owed",
       );
     });
 
-    it("rejects zero donations", () => {
-      const { billId } = openBill();
-      expect(() => sim.donate(stranger, billId, 0n)).toThrow("failed assert: Donation must be greater than zero");
+    it("rejects zero donations", async () => {
+      const { billId } = await openBill();
+      await expect(sim.donate(stranger, billId, 0n)).rejects.toThrow("failed assert: Donation must be greater than zero");
     });
 
-    it("rejects donations before the patient opens the fundraiser", () => {
+    it("rejects donations before the patient opens the fundraiser", async () => {
       const billId = randomBytes(32);
-      sim.issueBill(hospital, billId, 500n, randomBytes(32));
-      expect(() => sim.donate(stranger, billId, 10n)).toThrow("failed assert: This bill is not accepting donations");
+      await sim.issueBill(hospital, billId, 500n, randomBytes(32));
+      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow("failed assert: This bill is not accepting donations");
     });
 
-    it("stops donations to a suspended hospital", () => {
-      const { billId } = openBill();
-      sim.setHospitalActive(operator, hospitalPk, false);
-      expect(() => sim.donate(stranger, billId, 10n)).toThrow("failed assert: Hospital is suspended");
+    it("stops donations to a suspended hospital", async () => {
+      const { billId } = await openBill();
+      await sim.setHospitalActive(operator, hospitalPk, false);
+      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow("failed assert: Hospital is suspended");
     });
 
-    it("keeps a running total across bills", () => {
-      const a = openBill(300n).billId;
-      const b = openBill(700n).billId;
-      sim.donate(stranger, a, 300n);
-      sim.donate(stranger, b, 200n);
+    it("keeps a running total across bills", async () => {
+      const a = (await openBill(300n)).billId;
+      const b = (await openBill(700n)).billId;
+      await sim.donate(stranger, a, 300n);
+      await sim.donate(stranger, b, 200n);
       expect(sim.getLedger().totalRaised).toEqual(500n);
     });
   });
 
   describe("hospital actions", () => {
-    it("lets the issuing hospital cancel a bill, which stops donations", () => {
-      const { billId } = openBill();
-      sim.cancelBill(hospital, billId);
+    it("lets the issuing hospital cancel a bill, which stops donations", async () => {
+      const { billId } = await openBill();
+      await sim.cancelBill(hospital, billId);
       expect(sim.getLedger().bills.lookup(billId).status).toEqual(BillStatus.CANCELLED);
-      expect(() => sim.donate(stranger, billId, 10n)).toThrow("failed assert: This bill is not accepting donations");
-      expect(() => sim.cancelBill(hospital, billId)).toThrow("failed assert: Bill is already cancelled");
+      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow("failed assert: This bill is not accepting donations");
+      await expect(sim.cancelBill(hospital, billId)).rejects.toThrow("failed assert: Bill is already cancelled");
     });
 
-    it("does not let another hospital cancel the bill", () => {
-      const { billId } = openBill();
+    it("does not let another hospital cancel the bill", async () => {
+      const { billId } = await openBill();
       const otherHospital = createWardPrivateState(randomBytes(32));
-      sim.registerHospital(
+      await sim.registerHospital(
         operator,
         pureCircuits.hospitalKey(otherHospital.secretKey),
         "Other Clinic",
         encodeUserAddress(sampleUserAddress()),
       );
-      expect(() => sim.cancelBill(otherHospital, billId)).toThrow(
+      await expect(sim.cancelBill(otherHospital, billId)).rejects.toThrow(
         "failed assert: Only the issuing hospital can cancel this bill",
       );
     });
 
-    it("does not allow cancelling a fully funded bill", () => {
-      const { billId } = openBill(100n);
-      sim.donate(stranger, billId, 100n);
-      expect(() => sim.cancelBill(hospital, billId)).toThrow("failed assert: A fully funded bill cannot be cancelled");
+    it("does not allow cancelling a fully funded bill", async () => {
+      const { billId } = await openBill(100n);
+      await sim.donate(stranger, billId, 100n);
+      await expect(sim.cancelBill(hospital, billId)).rejects.toThrow("failed assert: A fully funded bill cannot be cancelled");
     });
 
-    it("lets the issuing hospital confirm treatment, and nobody else", () => {
-      const { billId } = openBill(100n);
-      expect(() => sim.confirmTreatment(stranger, billId)).toThrow(
+    it("lets the issuing hospital confirm treatment, and nobody else", async () => {
+      const { billId } = await openBill(100n);
+      await expect(sim.confirmTreatment(stranger, billId)).rejects.toThrow(
         "failed assert: Caller is not a registered hospital",
       );
-      sim.donate(stranger, billId, 100n);
-      sim.confirmTreatment(hospital, billId);
+      await sim.donate(stranger, billId, 100n);
+      await sim.confirmTreatment(hospital, billId);
       expect(sim.getLedger().bills.lookup(billId).treatmentComplete).toBe(true);
     });
   });
