@@ -5,7 +5,7 @@
 
 Ward lets a hospital vouch for a medical bill on-chain, lets the patient raise money for it without revealing who they are or what they are being treated for, and guarantees that every donation goes straight to the hospital.
 
-**Live on Midnight Preprod:** contract `e6070a97918b0706e94daf2c41bd88e9262a662ae893b08de516d9af6b70b698` (see [`ward-cli/deployments/preprod.json`](ward-cli/deployments/preprod.json)).
+**Live on Midnight Preprod (ledger 9):** contract `0eebc84fca20c9fef19d1c6329aa6582efa6b588eba93e36f90a42171bdcc05b` (see [`ward-cli/deployments/preprod.json`](ward-cli/deployments/preprod.json)). Preprod moved to ledger 9 on 9 November 2026; Ward runs on Compact 0.36.1, Midnight.js 5.0.1, wallet SDK 2.0.1 and proof server 9.0.2, the versions in Midnight's [compatibility matrix](https://docs.midnight.network/relnotes/support-matrix).
 
 **Demo video:** [youtu.be/Cg0x3ArplR0](https://youtu.be/Cg0x3ArplR0) · **Pitch deck:** [Ward pitch deck (PDF)](https://drive.google.com/file/d/1MxlcB9UZMgIEdEFogQOiMV9Ei1GJSI4m/view)
 
@@ -82,7 +82,7 @@ ward-ui/    Web app (React, Vite, Tailwind) connected to Lace
 
   ```bash
   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
-  compact update 0.31.1
+  compact update 0.36.1
   ```
 
 - For the web app: Chrome with the [Lace wallet](https://chromewebstore.google.com/detail/lace/gafhhkghbfjjkeiendhlofajokpaflmk) set to **Preprod**, funded from the [Preprod faucet](https://faucet.preprod.midnight.network), with its NIGHT generating DUST for fees.
@@ -122,13 +122,24 @@ npm run ward -- status
 npm run ward -- smoke-test                  # runs the whole flow on-chain
 ```
 
-A new wallet's first sync on Preprod replays about 1.6 million DUST events and takes a few hours. The CLI saves its progress every minute and on Ctrl+C, so later commands resume in minutes.
+A new wallet's dust sync starts at the ledger 9 upgrade instead of replaying about 1.86 million ledger 8 DUST events. The CLI saves its progress every minute and on Ctrl+C, so later commands resume in minutes.
 
 ## Tests
 
 - **Contract (28 tests, local simulator):** every role and rejection path, one fundraiser per bill, claim codes that can't be replayed across bills, donations forwarded to the hospital's payout address (checked through the transaction's token effects), and a privacy check that the claim code never appears in a transaction's public transcript.
 - **API (14 tests):** claim-link encoding, NIGHT amounts, address handling, and the combined public and private view.
-- **On-chain smoke test:** `npm run ward -- smoke-test` registers a hospital, issues a bill, opens its fundraiser, donates and confirms treatment on Preprod. The run below, on the live deployment, ended with the bill fully funded and its treatment confirmed:
+- **On-chain smoke test:** `npm run ward -- smoke-test` registers a hospital, issues a bill, opens its fundraiser, donates and confirms treatment on Preprod. The run below, on the live ledger 9 deployment, ended with the bill fully funded and its treatment confirmed:
+
+| Step | Circuit | Transaction | Block |
+|---|---|---|---|
+| Deploy Ward | constructor | `967be1ec432daf57c7db44423ce238dd0abd14bb00861636df0aaa83fba11cab` | |
+| 1. Register a hospital | `registerHospital` | `48475b578c8d4027fcf661f633d3c2a5c4812b58cccdd04463e036de97a8d6ae` | 3,562,910 |
+| 2. Issue a 5 NIGHT bill | `issueBill` | `36d567ef26d07d50e1b70221695b30ba52c7cb1f0b6b5d2dd92c673b633dede7` | 3,562,917 |
+| 3. Open the fundraiser | `openFundraiser` | `d5b237ba7d4fbae0ce5b96cac7cc8a559eb69eff7ba96dcdfc946573f3516743` | 3,562,924 |
+| 4. Donate 5 NIGHT, forwarded to the hospital | `donate` | `af3395dc81a392ace4d6da9d02298fd001e66368e20533a511bfc78089a26f00` | 3,562,929 |
+| 5. Confirm treatment | `confirmTreatment` | `2aa020fc926362433d60f446ef03972a403f749e89f175a206986396dfe8f7fd` | 3,562,939 |
+
+Before the ledger 9 upgrade, the first deployment (`e6070a97…`, Compact 0.31.1) ran the same flow in October 2026:
 
 | Step | Circuit | Transaction | Block |
 |---|---|---|---|
