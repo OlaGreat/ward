@@ -77,14 +77,14 @@ describe("Ward contract", () => {
       expect(fresh.hospitals.isEmpty()).toBe(true);
     });
 
-    it("derives unrelated operator and hospital keys from the same secret", async () => {
+    it("derives unrelated operator and hospital keys from the same secret", () => {
       const secret = randomBytes(32);
       expect(pureCircuits.operatorKey(secret)).not.toEqual(pureCircuits.hospitalKey(secret));
     });
   });
 
   describe("hospital registry", () => {
-    it("lets the operator register a hospital", async () => {
+    it("lets the operator register a hospital", () => {
       const record = sim.getLedger().hospitals.lookup(hospitalPk);
       expect(record.name).toEqual("St. Mercy Medical Centre");
       expect(record.payout.bytes).toEqual(encodeUserAddress(payoutHex));
@@ -92,13 +92,15 @@ describe("Ward contract", () => {
     });
 
     it("rejects registrations from anyone but the operator", async () => {
-      await expect(sim.registerHospital(stranger, randomBytes(32), "Fake Clinic", encodeUserAddress(sampleUserAddress()))).rejects.toThrow("failed assert: Only the Ward operator can do this");
+      await expect(
+        sim.registerHospital(stranger, randomBytes(32), "Fake Clinic", encodeUserAddress(sampleUserAddress())),
+      ).rejects.toThrow("failed assert: Only the Ward operator can do this");
     });
 
     it("rejects registering the same hospital twice", async () => {
-      await expect(sim.registerHospital(operator, hospitalPk, "St. Mercy again", encodeUserAddress(payoutHex))).rejects.toThrow(
-        "failed assert: Hospital already registered",
-      );
+      await expect(
+        sim.registerHospital(operator, hospitalPk, "St. Mercy again", encodeUserAddress(payoutHex)),
+      ).rejects.toThrow("failed assert: Hospital already registered");
     });
 
     it("lets only the operator suspend a hospital", async () => {
@@ -185,7 +187,9 @@ describe("Ward contract", () => {
       const billId = randomBytes(32);
       await sim.issueBill(hospital, billId, 500n, randomBytes(32));
       const impostor = withClaimCode(createWardPrivateState(randomBytes(32)), billId, randomBytes(32));
-      await expect(sim.openFundraiser(impostor, billId, "Not my bill")).rejects.toThrow("failed assert: Invalid claim code");
+      await expect(sim.openFundraiser(impostor, billId, "Not my bill")).rejects.toThrow(
+        "failed assert: Invalid claim code",
+      );
     });
 
     it("rejects a claim code that belongs to a different bill", async () => {
@@ -193,7 +197,9 @@ describe("Ward contract", () => {
       const otherBill = randomBytes(32);
       await sim.issueBill(hospital, otherBill, 500n, randomBytes(32));
       const replayer = withClaimCode(createWardPrivateState(randomBytes(32)), otherBill, code);
-      await expect(sim.openFundraiser(replayer, otherBill, "Replay")).rejects.toThrow("failed assert: Invalid claim code");
+      await expect(sim.openFundraiser(replayer, otherBill, "Replay")).rejects.toThrow(
+        "failed assert: Invalid claim code",
+      );
     });
 
     it("allows only one fundraiser per bill", async () => {
@@ -212,7 +218,9 @@ describe("Ward contract", () => {
     });
 
     it("rejects unknown bills", async () => {
-      await expect(sim.openFundraiser(stranger, randomBytes(32), "Ghost")).rejects.toThrow("failed assert: Unknown bill");
+      await expect(sim.openFundraiser(stranger, randomBytes(32), "Ghost")).rejects.toThrow(
+        "failed assert: Unknown bill",
+      );
     });
   });
 
@@ -251,7 +259,9 @@ describe("Ward contract", () => {
       expect(bill.status).toEqual(BillStatus.FUNDED);
       expect(sim.getLedger().totalRaised).toEqual(1_000n);
 
-      await expect(sim.donate(donor, billId, 1n)).rejects.toThrow("failed assert: This bill is not accepting donations");
+      await expect(sim.donate(donor, billId, 1n)).rejects.toThrow(
+        "failed assert: This bill is not accepting donations",
+      );
     });
 
     it("rejects donations larger than the amount still owed", async () => {
@@ -265,13 +275,17 @@ describe("Ward contract", () => {
 
     it("rejects zero donations", async () => {
       const { billId } = await openBill();
-      await expect(sim.donate(stranger, billId, 0n)).rejects.toThrow("failed assert: Donation must be greater than zero");
+      await expect(sim.donate(stranger, billId, 0n)).rejects.toThrow(
+        "failed assert: Donation must be greater than zero",
+      );
     });
 
     it("rejects donations before the patient opens the fundraiser", async () => {
       const billId = randomBytes(32);
       await sim.issueBill(hospital, billId, 500n, randomBytes(32));
-      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow("failed assert: This bill is not accepting donations");
+      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow(
+        "failed assert: This bill is not accepting donations",
+      );
     });
 
     it("stops donations to a suspended hospital", async () => {
@@ -294,7 +308,9 @@ describe("Ward contract", () => {
       const { billId } = await openBill();
       await sim.cancelBill(hospital, billId);
       expect(sim.getLedger().bills.lookup(billId).status).toEqual(BillStatus.CANCELLED);
-      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow("failed assert: This bill is not accepting donations");
+      await expect(sim.donate(stranger, billId, 10n)).rejects.toThrow(
+        "failed assert: This bill is not accepting donations",
+      );
       await expect(sim.cancelBill(hospital, billId)).rejects.toThrow("failed assert: Bill is already cancelled");
     });
 
@@ -315,7 +331,9 @@ describe("Ward contract", () => {
     it("does not allow cancelling a fully funded bill", async () => {
       const { billId } = await openBill(100n);
       await sim.donate(stranger, billId, 100n);
-      await expect(sim.cancelBill(hospital, billId)).rejects.toThrow("failed assert: A fully funded bill cannot be cancelled");
+      await expect(sim.cancelBill(hospital, billId)).rejects.toThrow(
+        "failed assert: A fully funded bill cannot be cancelled",
+      );
     });
 
     it("lets the issuing hospital confirm treatment, and nobody else", async () => {
