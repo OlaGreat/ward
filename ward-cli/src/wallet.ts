@@ -22,7 +22,6 @@ import {
   type EnvironmentConfiguration,
   FluentWalletBuilder,
   MidnightWalletProvider,
-  syncWallet,
 } from "@midnight-ntwrk/testkit-js";
 import {
   DustWallet,
@@ -207,7 +206,23 @@ export class DeployerWallet {
 
   async sync(): Promise<Balances> {
     this.logger.info("Syncing wallet with the network...");
-    const state = await syncWallet(this.wallet, 2_000, 30 * 60_000);
+    // testkit's syncWallet caps the whole sync at its timeout, which a first sync that
+    // replays ledger 8 history can exceed while still progressing. Fail only on a stall:
+    // no state update at all for ten minutes.
+    const synced = (s: FacadeState) =>
+      s.shielded.progress.isStrictlyComplete() &&
+      s.dust.progress.isStrictlyComplete() &&
+      s.unshielded.progress.isStrictlyComplete() &&
+      s.protocol._tag === "Settled";
+    const state = await Rx.firstValueFrom(
+      this.wallet.state().pipe(
+        Rx.timeout({
+          each: 10 * 60_000,
+          with: () => Rx.throwError(() => new Error("Wallet sync stalled for 10 minutes")),
+        }),
+        Rx.filter(synced),
+      ),
+    );
     await this.saveState();
     return balancesOf(state);
   }
